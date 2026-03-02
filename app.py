@@ -1,81 +1,99 @@
 import streamlit as st
 from openai import OpenAI
 import base64
+from PIL import Image
+import io
 
-st.set_page_config(page_title="RetinaGPT Pro", page_icon="👁️")
+# Sayfa ayarları
+st.set_page_config(page_title="Retina Academic Discussion", page_icon="👁️")
 
-def encode_image(uploaded_file):
-    return base64.b64encode(uploaded_file.read()).decode('utf-8')
+# Sol panel
+with st.sidebar:
+    st.title("⚙️ Ayarlar")
+    api_key = st.text_input("OpenAI API Key Giriniz:", type="password")
+    st.info("Bu sistem akademik retina görüntüleme analizi için tasarlanmıştır.")
 
-st.title("RetinaGPT v3 – Professional Imaging Analysis")
+st.title("👁️ Retina Subspecialty Educational System")
+st.markdown("---")
 
-api_key = st.text_input("Enter OpenAI API Key", type="password")
+# Sistem prompt (aynı kalabilir)
+SYSTEM_PROMPT = """
+You are a retina subspecialty educational discussion system.
+Your purpose is to provide structured academic discussion of retinal imaging findings and differential diagnostic reasoning for educational purposes.
+All outputs must be structured, objective, concise, and written in formal medical English.
+TERMINOLOGY STANDARD: Use formal ophthalmic subspecialty terminology. (e.g., cotton-wool spot, cherry-red spot).
+STRUCTURED ANALYSIS: 1) Imaging Quality, 2) Structural Findings, 3) Vascular Findings, 4) Peripheral Assessment, 5) Pattern Discussion, 6) Pathophysiologic Considerations.
+DIFFERENTIAL: Provide up to three diagnostic considerations. Use: 'Additional clinical or imaging data that may help clarify the pattern include:'.
+LIMITATIONS: Educational purposes only. Not medical advice.
+"""
 
-# Klinik Parametreler
-col1, col2 = st.columns(2)
-with col1:
-    age = st.text_input("Age (e.g., 65)")
-    symptom = st.text_input("Symptoms (e.g., Vision Loss)")
-with col2:
-    duration = st.text_input("Duration (e.g., 2 days)")
-    laterality = st.selectbox("Laterality", ["Unilateral", "Bilateral"])
+# Session state
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-uploaded_files = st.file_uploader("Upload Retinal Images", accept_multiple_files=True, type=["jpg", "jpeg", "png"])
+# Geçmiş mesajları göster (resim varsa göster)
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        if message["role"] == "user" and "image" in message:
+            st.image(message["image"], caption="Yüklenen fundus görüntüsü", use_column_width=True)
+        st.markdown(message["content"])
 
-if st.button("RUN MULTIMODAL ANALYSIS"):
+# Resim yükleme alanı (chat altına veya sidebar'a koyabilirsin)
+uploaded_file = st.file_uploader("Retina/fundus görüntüsü yükleyin (jpg/png)", type=["jpg", "jpeg", "png"])
+
+# Chat input
+if prompt := st.chat_input("Bulguları, vaka detaylarını veya sorunuzu yazın..."):
+
     if not api_key:
-        st.error("Please enter your API Key.")
-    elif not uploaded_files:
-        st.error("Please upload images.")
+        st.error("Lütfen sol taraftaki API Key alanını doldurun!")
     else:
-        try:
-            client = OpenAI(api_key=api_key)
-            
-            # Görüntüleri hazırlıyoruz
-            content_list = []
-            
-            # GPT'Yİ GÖRMEYE ZORLAYAN PROFESYONEL TALİMAT
-            instruction = f"""You are a specialized Retina Imaging AI assistant. 
-            The user is a medical professional using this for research/education.
-            
-            YOUR TASK: Analyze the specific visual findings in the attached retinal images.
-            CONTEXT: Age {age}, {symptom}, {duration}, {laterality}.
-            
-            DO NOT output a generic guide. Describe the EXACT lesions, hemorrhages, or fluid visible in THESE images.
-            
-            STRUCTURE:
-            1) Imaging Quality
-            2) Structural Morphology (Describe macula, fovea, and nerve head)
-            3) Vascular Findings (Describe vessels)
-            4) Peripheral Assessment
-            5) Pattern Correlation (Identify specific patterns like drusen, exudates, etc.)
-            6) Theoretical Pathophysiology
-            
-            DIFFERENTIAL: List 3 possible correlations based on VISUAL DATA."""
-            
-            content_list.append({"type": "text", "text": instruction})
+        # Kullanıcı mesajını hazırla
+        user_content = [{"type": "text", "text": prompt}]
 
-            for uploaded_file in uploaded_files:
-                base64_img = encode_image(uploaded_file)
-                content_list.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{base64_img}",
-                        "detail": "high"
-                    }
-                })
+        image_data = None
+        if uploaded_file is not None:
+            # Resmi base64'e çevir
+            bytes_data = uploaded_file.getvalue()
+            base64_image = base64.b64encode(bytes_data).decode('utf-8')
+            user_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+            })
+            # Resmi session'a da kaydet (gösterim için)
+            image_data = Image.open(io.BytesIO(bytes_data))
 
-            with st.spinner("AI is scanning the pixels..."):
+        full_user_message = {"role": "user", "content": prompt}
+        if image_data:
+            full_user_message["image"] = image_data  # gösterim için PIL Image
+
+        st.session_state.messages.append(full_user_message)
+
+        with st.chat_message("user"):
+            if image_data:
+                st.image(image_data, caption="Yüklenen görüntü", use_column_width=True)
+            st.markdown(prompt)
+
+        # OpenAI çağrısı
+        client = OpenAI(api_key=api_key)
+
+        with st.chat_message("assistant"):
+            with st.spinner("RetinaGPT analiz ediyor..."):
                 response = client.chat.completions.create(
-                    model="gpt-4o", 
-                    messages=[{"role": "user", "content": content_list}],
-                    max_tokens=2000,
-                    temperature=0.1
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        *[
+                            # Eski mesajları multimodal uyumlu hale getir (sadece text varsa text, yoksa content list)
+                            msg if isinstance(msg.get("content"), str) else
+                            {"role": msg["role"], "content": [c for c in msg.get("content", []) if isinstance(c, dict)]}
+                            for msg in st.session_state.messages
+                        ]
+                    ],
+                    max_tokens=1500,
+                    temperature=0.3  # daha tutarlı tıbbi cevap için düşük
                 )
-                
-                st.markdown("---")
-                st.markdown("### 🔬 RetinaGPT Multimodal Analysis")
-                st.write(response.choices[0].message.content)
 
-        except Exception as e:
-            st.error(f"Error: {e}")
+                full_response = response.choices[0].message.content
+                st.markdown(full_response)
+
+        st.session_state.messages.append({"role": "assistant", "content": full_response})
