@@ -43,8 +43,18 @@ def reset_case():
 
 
 # ---------------- Header ----------------
-st.title("👁️ RetinaGPT")
-st.caption("Prepared by Mehmet ÇITIRIK & Caner KARA")
+st.markdown(
+    """
+    <div style="text-align: center;">
+        <h1>👁️ RetinaGPT</h1>
+        <p style="font-size:16px; margin-top:-10px;">
+            Prepared by Mehmet ÇITIRIK & Caner KARA
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
 st.markdown("---")
 
 # ---------------- Clinical details (ABOVE image upload) ----------------
