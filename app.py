@@ -50,7 +50,7 @@ st.markdown("---")
 # ---------------- Clinical details (ABOVE image upload) ----------------
 clinical_text = st.text_area(
     "Please provide clinical details (Age, Sex, Symptoms, Duration, Laterality, History)",
-    placeholder="Age: 65, Sex: M, Symptoms: acute vision loss, Duration: 1 day, Laterality: OS, History: ...",
+    placeholder="Age: 65, Sex: Male, Symptoms: Acute vision loss, Duration: 1 day, Laterality: OS, History: ...",
     height=110,
     disabled=st.session_state.case_done,
 )
