@@ -1,13 +1,9 @@
 import streamlit as st
-from openai import OpenAI
 import base64
-from PIL import Image
-import io
+from openai import OpenAI
 
-# Sayfa ayarları
 st.set_page_config(page_title="Retina Academic Discussion", page_icon="👁️")
 
-# Sol panel
 with st.sidebar:
     st.title("⚙️ Ayarlar")
     api_key = st.text_input("OpenAI API Key Giriniz:", type="password")
@@ -16,7 +12,6 @@ with st.sidebar:
 st.title("👁️ Retina Subspecialty Educational System")
 st.markdown("---")
 
-# Sistem prompt (aynı kalabilir)
 SYSTEM_PROMPT = """
 You are a retina subspecialty educational discussion system.
 Your purpose is to provide structured academic discussion of retinal imaging findings and differential diagnostic reasoning for educational purposes.
@@ -27,73 +22,67 @@ DIFFERENTIAL: Provide up to three diagnostic considerations. Use: 'Additional cl
 LIMITATIONS: Educational purposes only. Not medical advice.
 """
 
-# Session state
+# ---- Image uploader (kritik parça) ----
+uploaded = st.file_uploader(
+    "Fundus/OCT/FAF/FFA görüntüsü yükleyin (jpg/png)",
+    type=["jpg", "jpeg", "png", "webp"]
+)
+
+# Chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Geçmiş mesajları göster (resim varsa göster)
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        if message["role"] == "user" and "image" in message:
-            st.image(message["image"], caption="Yüklenen fundus görüntüsü", use_column_width=True)
-        st.markdown(message["content"])
+for m in st.session_state.messages:
+    with st.chat_message(m["role"]):
+        st.markdown(m["content"])
 
-# Resim yükleme alanı (chat altına veya sidebar'a koyabilirsin)
-uploaded_file = st.file_uploader("Retina/fundus görüntüsü yükleyin (jpg/png)", type=["jpg", "jpeg", "png"])
+prompt = st.chat_input("Bulguları veya vaka detaylarını buraya yazın...")
 
-# Chat input
-if prompt := st.chat_input("Bulguları, vaka detaylarını veya sorunuzu yazın..."):
-
+if prompt:
     if not api_key:
-        st.error("Lütfen sol taraftaki API Key alanını doldurun!")
-    else:
-        # Kullanıcı mesajını hazırla
-        user_content = [{"type": "text", "text": prompt}]
+        st.error("Lütfen sol tarafa API Key giriniz!")
+        st.stop()
 
-        image_data = None
-        if uploaded_file is not None:
-            # Resmi base64'e çevir
-            bytes_data = uploaded_file.getvalue()
-            base64_image = base64.b64encode(bytes_data).decode('utf-8')
-            user_content.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-            })
-            # Resmi session'a da kaydet (gösterim için)
-            image_data = Image.open(io.BytesIO(bytes_data))
+    if uploaded is None:
+        st.error("Lütfen bir görüntü yükleyin. (Şu an modele görüntü gitmiyor.)")
+        st.stop()
 
-        full_user_message = {"role": "user", "content": prompt}
-        if image_data:
-            full_user_message["image"] = image_data  # gösterim için PIL Image
+    # kullanıcı mesajı ekrana ve history'e
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-        st.session_state.messages.append(full_user_message)
+    # image -> base64 data URL
+    img_bytes = uploaded.read()
+    b64 = base64.b64encode(img_bytes).decode("utf-8")
+    mime = uploaded.type  # e.g. image/png
+    data_url = f"data:{mime};base64,{b64}"
 
-        with st.chat_message("user"):
-            if image_data:
-                st.image(image_data, caption="Yüklenen görüntü", use_column_width=True)
-            st.markdown(prompt)
+    client = OpenAI(api_key=api_key)
 
-        # OpenAI çağrısı
-        client = OpenAI(api_key=api_key)
-
-        with st.chat_message("assistant"):
-            with st.spinner("RetinaGPT analiz ediyor..."):
-                response = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        *[
-                            # Eski mesajları multimodal uyumlu hale getir (sadece text varsa text, yoksa content list)
-                            msg if isinstance(msg.get("content"), str) else
-                            {"role": msg["role"], "content": [c for c in msg.get("content", []) if isinstance(c, dict)]}
-                            for msg in st.session_state.messages
-                        ]
+    with st.chat_message("assistant"):
+        # Responses API (multimodal için en düzgün yol)
+        response = client.responses.create(
+            model="gpt-4o",
+            input=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                # önce geçmişi text olarak aktar (isterseniz kısaltabilirsiniz)
+                *[
+                    {"role": msg["role"], "content": msg["content"]}
+                    for msg in st.session_state.messages
+                ],
+                # bu turda multimodal içerik
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": prompt},
+                        {"type": "input_image", "image_url": data_url},
                     ],
-                    max_tokens=1500,
-                    temperature=0.3  # daha tutarlı tıbbi cevap için düşük
-                )
+                },
+            ],
+        )
 
-                full_response = response.choices[0].message.content
-                st.markdown(full_response)
+        full_response = response.output_text
+        st.markdown(full_response)
 
-        st.session_state.messages.append({"role": "assistant", "content": full_response})
+    st.session_state.messages.append({"role": "assistant", "content": full_response})
