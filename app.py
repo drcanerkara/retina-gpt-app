@@ -23,7 +23,7 @@ except Exception:
     api_key = None
 
 if not api_key:
-    st.error("OPENAI_API_KEY bulunamadı. Lütfen .streamlit/secrets.toml içine ekleyin.")
+    st.error("OPENAI_API_KEY not found. Please add it in the Streamlit Cloud Secrets panel.")
     st.stop()
 
 # ---------------- State init ----------------
@@ -34,23 +34,33 @@ if "case_done" not in st.session_state:
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 
+
 def reset_case():
     st.session_state.messages = []
     st.session_state.case_done = False
     st.session_state.uploader_key += 1  # resets uploader
     st.rerun()
 
+
 # ---------------- Header ----------------
 st.title("👁️ RetinaGPT")
 st.caption("Prepared by Mehmet ÇITIRIK & Caner KARA")
 st.markdown("---")
 
-# ---------------- Upload ----------------
+# ---------------- Clinical details (ABOVE image upload) ----------------
+clinical_text = st.text_area(
+    "Clinical details (Age, Sex, Symptoms, Duration, Laterality, History)",
+    placeholder="Age: 65 | Sex: M | Symptoms: acute vision loss | Duration: 1 day | Laterality: OS | History: ...",
+    height=110,
+    disabled=st.session_state.case_done,
+)
+
+# ---------------- Upload (BELOW clinical details) ----------------
 uploaded = st.file_uploader(
-    "Fundus/OCT/FAF/FFA görüntüsü yükleyin (jpg/png/webp)",
+    "Upload retinal imaging (Fundus / OCT / FAF / FA) — jpg/png/webp",
     type=["jpg", "jpeg", "png", "webp"],
     key=f"uploader_{st.session_state.uploader_key}",
-    disabled=st.session_state.case_done
+    disabled=st.session_state.case_done,
 )
 
 # ---------------- Chat history ----------------
@@ -65,25 +75,23 @@ if st.session_state.case_done:
         reset_case()
     st.caption("Clears the current case (messages + image) and starts a fresh patient.")
 
-# ---------------- Chat input ----------------
-placeholder_text = (
-    "Bulguları veya vaka detaylarını buraya yazın... "
-    "(Age, Sex, Primary symptom, Symptom duration: acute/subacute/chronic, "
-    "Laterality: unilateral/bilateral, Relevant history, Imaging modality)"
-)
+# ---------------- Analyze button ----------------
+analyze = st.button("🔍 Analyze", use_container_width=True, disabled=st.session_state.case_done)
 
-prompt = st.chat_input(placeholder_text, disabled=st.session_state.case_done)
-
-# ---------------- On submit ----------------
-if prompt:
+if analyze:
     if uploaded is None:
-        st.error("Lütfen bir görüntü yükleyin. (Analiz için görüntü gerekli.)")
+        st.error("Please upload an image (required for analysis).")
         st.stop()
 
-    # show/store user message
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    # Compose a single user payload (clean + simple)
+    user_payload = clinical_text.strip() if clinical_text else ""
+    if not user_payload:
+        user_payload = "No clinical details provided."
+
+    # Store user message for display/history
+    st.session_state.messages.append({"role": "user", "content": user_payload})
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(user_payload)
 
     # image -> data URL
     img_bytes = uploaded.read()
@@ -105,7 +113,7 @@ if prompt:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "input_text", "text": prompt},
+                        {"type": "input_text", "text": user_payload},
                         {"type": "input_image", "image_url": data_url},
                     ],
                 },
