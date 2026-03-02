@@ -57,7 +57,7 @@ clinical_text = st.text_area(
 
 # ---------------- Upload (BELOW clinical details) ----------------
 uploaded = st.file_uploader(
-    "Upload retinal imaging (Fundus / OCT / FAF / FA) — jpg/png/webp",
+    "Please upload retinal imaging (Fundus / OCT / FAF / FA) — jpg/png/webp",
     type=["jpg", "jpeg", "png", "webp"],
     key=f"uploader_{st.session_state.uploader_key}",
     disabled=st.session_state.case_done,
