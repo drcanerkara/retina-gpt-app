@@ -10,9 +10,20 @@ SYSTEM_PROMPT = """
 You are a retina subspecialty educational discussion system.
 Your purpose is to provide structured academic discussion of retinal imaging findings and differential diagnostic reasoning for educational purposes.
 All outputs must be structured, objective, concise, and written in formal medical English.
-TERMINOLOGY STANDARD: Use formal ophthalmic subspecialty terminology. (e.g., cotton-wool spot, cherry-red spot).
-STRUCTURED ANALYSIS: 1) Imaging Quality, 2) Structural Findings, 3) Vascular Findings, 4) Peripheral Assessment, 5) Pattern Discussion, 6) Pathophysiologic Considerations.
-DIFFERENTIAL: Provide up to three diagnostic considerations. Use: 'Additional clinical or imaging data that may help clarify the pattern include:'.
+
+TERMINOLOGY STANDARD: Use formal ophthalmic subspecialty terminology (e.g., cotton-wool spot, cherry-red spot).
+
+STRUCTURED ANALYSIS:
+1) Imaging Quality
+2) Structural Findings
+3) Vascular Findings
+4) Peripheral Assessment
+5) Pattern Discussion
+6) Pathophysiologic Considerations
+
+DIFFERENTIAL: Provide up to three diagnostic considerations.
+Use: 'Additional clinical or imaging data that may help clarify the pattern include:'.
+
 LIMITATIONS: Educational purposes only. Not medical advice.
 """
 
@@ -42,7 +53,14 @@ def reset_case():
     st.rerun()
 
 
-# ---------------- Header ----------------
+def file_to_data_url(file) -> str:
+    """Convert an uploaded file to a data URL (safe for multiple files)."""
+    b = file.getvalue()  # do NOT use read() repeatedly
+    b64 = base64.b64encode(b).decode("utf-8")
+    return f"data:{file.type};base64,{b64}"
+
+
+# ---------------- Header (centered) ----------------
 st.markdown(
     """
     <div style="text-align: center;">
@@ -54,24 +72,30 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-
 st.markdown("---")
 
 # ---------------- Clinical details (ABOVE image upload) ----------------
 clinical_text = st.text_area(
-    "Please provide clinical details (Age, Sex, Symptoms, Duration, Laterality, History)",
-    placeholder="Age: 65, Sex: Male, Symptoms: Acute vision loss, Duration: 1 day, Laterality: OS, History: ...",
-    height=110,
+    "Please provide clinical details",
+    placeholder="Age, Sex, Symptoms, Duration, Laterality, History",
+    height=100,
     disabled=st.session_state.case_done,
 )
 
-# ---------------- Upload (BELOW clinical details) ----------------
-uploaded = st.file_uploader(
+# ---------------- Upload (multi-file) ----------------
+uploaded_files = st.file_uploader(
     "Please upload retinal imaging (Fundus / OCT / FAF / FA) — jpg/png/webp",
     type=["jpg", "jpeg", "png", "webp"],
+    accept_multiple_files=True,
     key=f"uploader_{st.session_state.uploader_key}",
     disabled=st.session_state.case_done,
 )
+
+# ---------------- Preview (optional but helpful) ----------------
+if uploaded_files and len(uploaded_files) > 0:
+    st.subheader("Image Preview")
+    for i, f in enumerate(uploaded_files, start=1):
+        st.image(f, caption=f"Image {i}: {f.name}")
 
 # ---------------- Chat history ----------------
 for m in st.session_state.messages:
@@ -83,18 +107,17 @@ if st.session_state.case_done:
     st.divider()
     if st.button("🧼 Ask New Patient", use_container_width=True):
         reset_case()
-    st.caption("Clears the current case (messages + image) and starts a fresh patient.")
+    st.caption("Clears the current case (messages + images) and starts a fresh patient.")
 
 # ---------------- Analyze button ----------------
 analyze = st.button("🔍 Analyze", use_container_width=True, disabled=st.session_state.case_done)
 
 if analyze:
-    if uploaded is None:
-        st.error("Please upload an image (required for analysis).")
+    if not uploaded_files or len(uploaded_files) == 0:
+        st.error("Please upload at least one image (required for analysis).")
         st.stop()
 
-    # Compose a single user payload (clean + simple)
-    user_payload = clinical_text.strip() if clinical_text else ""
+    user_payload = (clinical_text or "").strip()
     if not user_payload:
         user_payload = "No clinical details provided."
 
@@ -103,11 +126,15 @@ if analyze:
     with st.chat_message("user"):
         st.markdown(user_payload)
 
-    # image -> data URL
-    img_bytes = uploaded.read()
-    b64 = base64.b64encode(img_bytes).decode("utf-8")
-    mime = uploaded.type
-    data_url = f"data:{mime};base64,{b64}"
+    # Build multimodal content blocks (multiple images in one case)
+    content_blocks = [
+        {"type": "input_text", "text": user_payload},
+        {"type": "input_text", "text": "Multiple images uploaded. Interpret them as a single case and integrate findings across modalities."},
+    ]
+
+    for i, f in enumerate(uploaded_files, start=1):
+        content_blocks.append({"type": "input_text", "text": f"Image {i} filename: {f.name}"})
+        content_blocks.append({"type": "input_image", "image_url": file_to_data_url(f)})
 
     client = OpenAI(api_key=api_key)
 
@@ -120,13 +147,7 @@ if analyze:
                     {"role": msg["role"], "content": msg["content"]}
                     for msg in st.session_state.messages
                 ],
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": user_payload},
-                        {"type": "input_image", "image_url": data_url},
-                    ],
-                },
+                {"role": "user", "content": content_blocks},
             ],
         )
 
