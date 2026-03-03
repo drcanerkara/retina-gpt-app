@@ -1,0 +1,22 @@
+[
+  {
+    "text": "# TORPEDO MACULOPATHY\n#tags: dystrophy, atrophy, OCT+FAF, child/young, unilateral, routine\n\n## Core phenotype (one-liner)\n- Congenital, torpedo-shaped hypopigmented lesion temporal to the fovea, usually incidental.\n\n## Typical imaging\n- Color fundus: well-demarcated hypopigmented torpedo-shaped lesion temporal to fovea.\n- OCT: outer retinal attenuation ± focal outer retinal cavitation; RPE alteration.\n- FAF: hypoautofluorescent lesion with possible hyperAF rim.\n\n## Key discriminators\n- vs CHRPE: CHRPE is flat, deeply pigmented, sharply demarcated.\n- vs Choroidal nevus: typically gray, choroidal, not classic torpedo geometry.\n\n---",
+    "source_file": "retina_cards.md"
+  },
+  {
+    "text": "# BEST DISEASE (BEST1) / VITELLIFORM MACULAR DYSTROPHY\n#tags: dystrophy, vitelliform, OCT+FAF, child/young, bilateral, routine\n\n## Core phenotype (one-liner)\n- Inherited vitelliform macular dystrophy with staged subretinal vitelliform material and risk of CNV/atrophy.\n\n## Typical imaging\n- Color fundus: “egg-yolk” lesion (vitelliform) or fragmented “scrambled egg” (vitelliruptive).\n- OCT: dome-shaped subretinal hyperreflective vitelliform material; later outer retinal disruption/atrophy.\n- FAF: strong hyperAF over vitelliform material; hypoAF in atrophic stage.\n- OCTA/FA: evaluate for CNV if new fluid/hemorrhage.\n\n## Key discriminators\n- vs AOFVD: later onset and often smaller lesions.\n- vs CSC: CSC has SRF without dense vitelliform deposit and has pachychoroid context.\n\n---",
+    "source_file": "retina_cards.md"
+  },
+  {
+    "text": "# STARGARDT DISEASE (ABCA4) / FUNDUS FLAVIMACULATUS\n#tags: dystrophy, bulls-eye, OCT+FAF, child/young, bilateral, routine\n\n## Core phenotype (one-liner)\n- Inherited macular dystrophy with flecks and progressive central vision loss; bull’s-eye phenotype may occur.\n\n## Typical imaging\n- Color fundus: pisciform flecks ± macular atrophy.\n- FAF: flecks (often hyperAF) and macular hypoAF; peripapillary sparing can be suggestive.\n- OCT: EZ loss and outer retinal thinning in macula.\n\n## Key discriminators\n- vs Hydroxychloroquine toxicity: exposure history and different FAF distribution.\n- vs Cone-rod dystrophy: ERG patterns and broader dysfunction.\n\n---",
+    "source_file": "retina_cards.md"
+  },
+  {
+    "text": "# CENTRAL SEROUS CHORIORETINOPATHY (CSC)\n#tags: pachychoroid, edema, OCT+FA, adult, unilateral, routine\n\n## Core phenotype (one-liner)\n- Serous neurosensory detachment due to choroidal hyperpermeability / RPE leak.\n\n## Typical imaging\n- OCT: serous retinal detachment ± small PED; pachychoroid features if EDI available.\n- FA: focal “inkblot” or “smokestack” leak; late pooling.\n- FAF: gravitational tracks in chronic disease.\n\n## Key discriminators\n- vs nAMD: older age, drusen, SHRM, hemorrhage favor nAMD.\n- vs VKH: VKH has bilateral inflammation and multiple serous detachments with choroidal thickening.\n\n---",
+    "source_file": "retina_cards.md"
+  },
+  {
+    "text": "# CENTRAL RETINAL VEIN OCCLUSION (CRVO)\n#tags: vascular, occlusion, FA+OCT, elderly, unilateral, urgent\n\n## Core phenotype (one-liner)\n- Venous outflow obstruction with dilated tortuous veins and widespread hemorrhages.\n\n## Typical imaging\n- Color fundus: diffuse retinal hemorrhages, venous engorgement, disc edema.\n- OCT: macular edema common (intraretinal cysts ± SRF).\n- FA: delayed venous filling; ischemia assessment.\n- OCTA: capillary non-perfusion zones.\n\n## Key discriminators\n- vs BRVO: BRVO is sectoral.\n- vs OIS: OIS has delayed choroidal filling and carotid disease context.",
+    "source_file": "retina_cards.md"
+  }
+]
