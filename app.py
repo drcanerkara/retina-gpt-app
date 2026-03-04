@@ -5,16 +5,13 @@ import faiss
 import numpy as np
 from openai import OpenAI
 
-# Sayfa Yapılandırması
+# ---------- Sayfa Yapılandırması ----------
 st.set_page_config(page_title="RetinaGPT", page_icon="👁️")
 
-# ---------- RAG FONKSİYONLARI ----------
-
+# ---------- RAG FONKSİYONLARI (YENİ) ----------
 @st.cache_resource
 def load_rag_assets():
-    """FAISS indexini ve metadata (meta.json) dosyalarını yükler."""
     try:
-        # Görseldeki yapıya göre index ve meta dosyalarını yüklüyoruz
         index = faiss.read_index("data/index.faiss")
         with open("data/meta.json", "r", encoding="utf-8") as f:
             meta = json.load(f)
@@ -23,57 +20,144 @@ def load_rag_assets():
         st.error(f"RAG dosyaları yüklenemedi: {e}")
         return None, None
 
-def get_embedding(text, client, model="text-embedding-3-small"):
-    """Kullanıcının metnini arama yapmak için vektöre dönüştürür."""
+def get_embedding(text, client):
     text = text.replace("\n", " ")
-    return client.embeddings.create(input=[text], model=model).data[0].embedding
+    return client.embeddings.create(input=[text], model="text-embedding-3-small").data[0].embedding
 
 def search_rag(query_text, client, index, meta, k=3):
-    """Vektör veritabanında en yakın sonuçları bulur ve metinleri çeker."""
-    if not index or not meta:
+    if not index or not meta or not query_text.strip():
         return ""
-    
-    # 1. Metni vektöre çevir
     query_vector = get_embedding(query_text, client)
-    
-    # 2. FAISS üzerinde arama yap
     distances, indices = index.search(np.array([query_vector]).astype('float32'), k)
-    
-    # 3. meta.json yapısına göre metinleri topla
     results = []
     for i in indices[0]:
         if i != -1 and i < len(meta):
-            # meta.json içindeki "text" alanını çekiyoruz
-            entry_text = meta[i].get("text", "")
-            source = meta[i].get("source_file", "Retina Cards")
-            results.append(f"[KAYNAK: {source}]\n{entry_text}")
-    
+            results.append(meta[i].get("text", ""))
     return "\n\n".join(results)
 
-# ---------- PROMPT ----------
-
+# ---------- ORİJİNAL SYSTEM PROMPT (DOKUNULMADI) ----------
 SYSTEM_PROMPT = """
 You are RetinaGPT, a retina subspecialty educational discussion and decision-support system.
 
 PURPOSE
-Provide structured academic discussion of retinal imaging findings and differential diagnostic reasoning for educational purposes only.
+Provide structured academic discussion of retinal imaging findings and differential diagnostic reasoning for educational purposes only. Not medical advice.
 
 STYLE
 - Formal medical English, objective, concise.
-- Use retina subspecialty terminology.
+- Use retina subspecialty terminology (e.g., ellipsoid zone/EZ, RPE, SHRM, PED, hypertransmission, cotton-wool spot, perivascular sheathing).
+- Avoid over-commitment for rare/atypical patterns; describe morphology first, then offer a ranked differential.
 
 REFERENCE KNOWLEDGE (RAG)
-If "Reference knowledge (RAG)" is provided, you MUST treat it as the primary factual source. 
-Use it to refine discriminators, pitfalls, work-up, and management.
+If "Reference knowledge (RAG)" / "REFERENCE CARDS" are provided, you MUST treat them as the primary factual source.
+- Use them to refine discriminators, pitfalls, work-up, and management.
+- If imaging suggests a different pattern than retrieved cards, explicitly state the discrepancy and explain why.
+- Do not invent facts not supported by imaging/metadata/reference cards.
 
-[... Orijinal promptundaki diğer tüm adımlar buraya gelecek ...]
+INPUTS
+You may receive:
+1) Clinical metadata (Age, Sex, Symptoms, Duration, Laterality, History)
+2) One or more retinal images (fundus/OCT/FAF/FA/OCTA), possibly multiple modalities.
+
+GLOBAL SAFETY
+- Educational purposes only. No patient-specific medical advice or treatment instructions.
+- For emergency patterns, recommend urgent evaluation but do not prescribe.
+
+========================================================
+STEP 0 — CLINICAL TRIAGE ENGINE (before images)
+========================================================
+First analyze clinical metadata:
+- Age, Sex
+- Primary symptom(s): photopsia, scotoma, metamorphopsia, acute painless vision loss, floaters, pain, etc.
+- Duration: acute / subacute / chronic
+- Laterality: unilateral / bilateral
+- Relevant history: viral prodrome, steroid exposure, autoimmune disease, pregnancy, malignancy, drugs (HCQ, tamoxifen, MEK inhibitors), immunosuppression, trauma.
+
+Output a short "Clinical Triage" that narrows likely diagnostic buckets BEFORE imaging.
+
+========================================================
+STEP 1 — MODALITY IDENTIFICATION
+========================================================
+Identify which modalities are present and list them:
+- Color fundus photography
+- OCT
+- FAF
+- FA / ICGA
+- OCTA
+
+Then list "Missing modalities that may improve diagnostic confidence" (only if relevant).
+
+========================================================
+STEP 2 — PATTERN RECOGNITION ENGINE (high-level first)
+========================================================
+Before detailed feature extraction, determine if the case matches a known retinal pattern. Choose up to TWO patterns.
+If uncertain, state: "Pattern is mixed or uncertain" and proceed.
+
+========================================================
+STEP 3 — MULTIMODAL IMAGING FEATURE EXTRACTION (modality-by-modality)
+========================================================
+Analyze each available modality separately, then integrate.
+
+========================================================
+STEP 4 — IMAGE FEATURE CHECKLIST (explicit)
+========================================================
+Mark each as PRESENT / ABSENT / UNCERTAIN:
+1) Subretinal fluid
+2) Intraretinal fluid/cysts
+3) Hemorrhage/exudation
+4) Retinal whitening / inner retinal ischemia
+5) Outer retinal loss (EZ disruption)
+6) RPE atrophy / hypertransmission
+7) Vitelliform material (subretinal deposit)
+8) Inflammatory signs (white dots/placoid lesions/vitritis clues)
+9) Neovascularization suspected
+10) True mass lesion suspected (requires OCT-supported elevation/solid structure)
+
+========================================================
+STEP 5 — INTERPRETATION GUARDRAILS
+========================================================
+- Do NOT label a lesion "mass/tumor/elevated lesion" unless OCT shows clear dome-shaped thickening or a discrete solid hyperreflective structure.
+- If OCT shows outer retinal thinning, RPE disruption, EZ loss, or cavitation WITHOUT a solid mass, describe it as an outer retinal/RPE abnormality (not tumor).
+
+========================================================
+STEP 6 — DIFFERENTIAL DIAGNOSIS ENGINE (ranked + weighted)
+========================================================
+Provide:
+Most Likely Diagnosis + brief justification
+Differential Diagnosis (max 4, ranked) with approximate probabilities summing to 100%
+Confidence Level: Low / Moderate / High
+
+========================================================
+STEP 7 — ADDITIONAL IMAGING / DATA REQUEST (adaptive dialogue)
+========================================================
+If confidence is Low/Moderate because critical information is missing, recommend additional imaging/tests and WHY they help, then invite user to upload missing modality images to continue the SAME CASE.
+
+========================================================
+STEP 8 — EMERGENCY TRIAGE LABEL
+========================================================
+Label urgency: CRITICAL / URGENT / ROUTINE
+
+========================================================
+FINAL OUTPUT FORMAT (always)
+========================================================
+1) Clinical Triage
+2) Detected Modalities + Missing Modalities
+3) Detected Pattern(s)
+4) Imaging Quality
+5) Findings by Modality (Fundus / OCT / FAF / Angiography-OCTA)
+6) Integrated Pattern Discussion
+7) Image Feature Checklist
+8) Most Likely Diagnosis
+9) Differential Diagnosis (ranked, weighted)
+10) Confidence Level
+11) Additional imaging/tests to clarify (if needed)
+12) Emergency triage label
+13) Educational limitations statement
 """
 
-# ---------- KURULUM VE API ----------
-
+# ---------- API Key ve Dosyalar ----------
 api_key = st.secrets.get("OPENAI_API_KEY", None)
 if not api_key:
-    st.error("Lütfen Streamlit Secrets'a OPENAI_API_KEY ekleyin.")
+    st.error("OPENAI_API_KEY not found.")
     st.stop()
 
 client = OpenAI(api_key=api_key)
@@ -84,12 +168,14 @@ def file_to_data_url(file) -> str:
     b64 = base64.b64encode(b).decode("utf-8")
     return f"data:{file.type};base64,{b64}"
 
-# ---------- UI ----------
+# ---------- UI (ORİJİNAL TASARIM) ----------
 st.markdown(
     """
     <div style="text-align: center;">
         <h1>👁️ RetinaGPT</h1>
-        <p style="font-size:16px; margin-top:-10px;">Prepared by Mehmet ÇITIRIK & Caner KARA</p>
+        <p style="font-size:16px; margin-top:-10px;">
+            Prepared by Mehmet ÇITIRIK & Caner KARA
+        </p>
     </div>
     """,
     unsafe_allow_html=True
@@ -97,71 +183,58 @@ st.markdown(
 st.markdown("---")
 
 clinical_text = st.text_area(
-    "Clinical Details",
-    placeholder="Age, Sex, Symptoms, Duration, History...",
+    "Please provide clinical details",
+    placeholder="Age, Sex, Symptoms, Duration, Laterality, History",
     height=100,
 )
 
 uploaded_files = st.file_uploader(
-    "Upload Retinal Imaging",
+    "Please upload retinal imaging (Fundus / OCT / FAF / FA / OCTA) — jpg/png/webp",
     type=["jpg", "jpeg", "png", "webp"],
     accept_multiple_files=True,
 )
 
 if uploaded_files:
     st.subheader("Image Preview")
-    cols = st.columns(len(uploaded_files))
-    for i, f in enumerate(uploaded_files):
-        cols[i].image(f, caption=f.name)
+    for i, f in enumerate(uploaded_files, start=1):
+        st.image(f, caption=f"Image {i}: {f.name}")
 
-analyze = st.button("🔍 Analyze Case", use_container_width=True)
+analyze = st.button("🔍 Analyze", use_container_width=True)
 
 if analyze:
     if not uploaded_files:
-        st.error("Please upload images.")
+        st.error("Please upload at least one image.")
         st.stop()
 
-    with st.spinner("RAG Knowledge Base searching and analyzing..."):
-        # 1. RAG Araması Yap (Sadece klinik metin varsa arama yapıyoruz)
-        rag_context = ""
-        if clinical_text.strip():
-            rag_context = search_rag(clinical_text, client, index, meta)
+    with st.spinner("Searching RAG and analyzing..."):
+        # 1. RAG'da Ara (Klinik metin kullanılarak meta.json'dan bilgi çekilir)
+        retrieved_cards = search_rag(clinical_text, client, index, meta)
+        
+        # 2. Mesajları Oluştur
+        user_payload = (clinical_text or "").strip() or "No clinical details provided."
+        
+        content_blocks = []
+        
+        # Eğer RAG sonucu varsa prompta enjekte et
+        if retrieved_cards:
+            content_blocks.append({"type": "text", "text": f"### REFERENCE CARDS (RAG):\n{retrieved_cards}\n\n---"})
+            
+        content_blocks.append({"type": "text", "text": f"CLINICAL DATA: {user_payload}"})
+        content_blocks.append({"type": "text", "text": "Interpret these images as a single case and follow all STEPs in your instructions."})
 
-        # 2. Mesaj Yapısını Kur
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        
-        user_content = []
-        
-        # Eğer RAG sonucu varsa en başa ekliyoruz
-        if rag_context:
-            user_content.append({
-                "type": "text", 
-                "text": f"### REFERENCE KNOWLEDGE (RAG):\n{rag_context}\n\n---"
-            })
-        
-        user_content.append({
-            "type": "text", 
-            "text": f"CLINICAL CASE DATA:\n{clinical_text if clinical_text else 'No details provided.'}"
-        })
+        for i, f in enumerate(uploaded_files, start=1):
+            content_blocks.append({"type": "image_url", "image_url": {"url": file_to_data_url(f)}})
 
-        for f in uploaded_files:
-            user_content.append({
-                "type": "image_url",
-                "image_url": {"url": file_to_data_url(f)}
-            })
-        
-        messages.append({"role": "user", "content": user_content})
-
-        # 3. GPT-4o API Çağrısı
+        # 3. API Çağrısı (GPT-4o Vision API yapısına uygun)
         try:
-            response = client.chat.completions.create(
+            resp = client.chat.completions.create(
                 model="gpt-4o",
-                messages=messages,
-                max_tokens=2500,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": content_blocks},
+                ],
+                max_tokens=2500
             )
-            st.markdown(response.choices[0].message.content)
+            st.markdown(resp.choices[0].message.content)
         except Exception as e:
-            st.error(f"An error occurred: {e}")
-
-st.markdown("---")
-st.caption("Educational use only. Not for clinical diagnosis.")
+            st.error(f"Error during analysis: {e}")
