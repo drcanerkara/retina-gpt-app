@@ -3,120 +3,127 @@ import base64
 import json
 import faiss
 import numpy as np
+import os
 from openai import OpenAI
 
 # ---------- Sayfa Yapılandırması ----------
 st.set_page_config(page_title="RetinaGPT", page_icon="👁️", layout="wide")
 
-# ---------- RAG FONKSİYONLARI (Kritik Bölüm) ----------
+# ---------- RAG SİSTEMİ (HATA AYIKLAMALI) ----------
 @st.cache_resource
 def load_rag_assets():
-    """Veritabanını ve Metadata'yı yükler."""
+    index_path = "data/index.faiss"
+    meta_path = "data/meta.json"
+    
+    if not os.path.exists(index_path) or not os.path.exists(meta_path):
+        st.error(f"KRİTİK HATA: Veritabanı dosyaları bulunamadı! Yol: {os.getcwd()}")
+        return None, None
+    
     try:
-        # Görselindeki 'data/' klasör yapısına göre ayarlandı
-        index = faiss.read_index("data/index.faiss")
-        with open("data/meta.json", "r", encoding="utf-8") as f:
+        index = faiss.read_index(index_path)
+        with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
         return index, meta
     except Exception as e:
-        st.error(f"RAG dosyaları yüklenemedi: {e}")
+        st.error(f"Dosya okuma hatası: {e}")
         return None, None
 
 def get_embedding(text, client):
-    """Metni arama yapılabilir vektöre çevirir."""
+    # Veritabanını oluştururken kullanılan modelle AYNI olmalı
     return client.embeddings.create(input=[text], model="text-embedding-3-small").data[0].embedding
 
 def search_rag(query_text, client, index, meta, k=3):
-    """Veritabanında arama yapar."""
     if not index or not meta or not query_text.strip():
         return ""
     
-    query_vector = get_embedding(query_text, client)
-    distances, indices = index.search(np.array([query_vector]).astype('float32'), k)
-    
-    results = []
-    for i in indices[0]:
-        if i != -1 and i < len(meta):
-            results.append(meta[i].get("text", ""))
-    return "\n\n".join(results)
+    try:
+        query_vector = get_embedding(query_text, client)
+        distances, indices = index.search(np.array([query_vector]).astype('float32'), k)
+        
+        results = []
+        for i in indices[0]:
+            if i != -1 and i < len(meta):
+                # meta.json yapısına göre 'text' alanını çekiyoruz
+                content = meta[i].get("text", "No content found")
+                results.append(content)
+        return "\n\n".join(results)
+    except Exception as e:
+        return f"Arama sırasında hata: {e}"
 
-# ---------- ORİJİNAL PROMPT (KORUNDU) ----------
+# ---------- SYSTEM PROMPT (ORİJİNAL YAPINIZ) ----------
 SYSTEM_PROMPT = """
 You are RetinaGPT, a retina subspecialty educational discussion and decision-support system.
-[... Senin orijinal 13 adımlık promptunun tamamı buraya gelecek ...]
+[... 13 ADIMLIK TÜM PROMPTUNUZU BURAYA YAPIŞTIRIN ...]
 """
 
-# ---------- API Kurulumu ----------
-api_key = st.secrets.get("OPENAI_API_KEY", None)
-if not api_key:
-    st.error("API Key bulunamadı. Lütfen Streamlit Secrets'a ekleyin.")
-    st.stop()
-
+# ---------- KURULUM ----------
+api_key = st.secrets.get("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key)
 index, meta = load_rag_assets()
 
 def file_to_data_url(file) -> str:
-    return f"data:{file.type};base64,{base64.b64encode(file.getvalue()).decode('utf-8')}"
+    return f"data:{file.type};base64,{base64.b64encode(file.getvalue()).decode()}"
 
-# ---------- UI TASARIMI ----------
+# ---------- UI ----------
 st.markdown("<h1 style='text-align: center;'>👁️ RetinaGPT</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center;'>Prepared by Mehmet ÇITIRIK & Caner KARA</p>", unsafe_allow_html=True)
 st.markdown("---")
 
-clinical_text = st.text_area("Please provide clinical details", placeholder="Age, Symptoms, CNRKR123456...", height=100)
-uploaded_files = st.file_uploader("Upload images", type=["jpg", "png", "webp"], accept_multiple_files=True)
+clinical_text = st.text_area("Please provide clinical details", placeholder="CNRKR123456 testini buraya yazın...", height=100)
+uploaded_files = st.file_uploader("Upload Images", type=["jpg", "png", "webp"], accept_multiple_files=True)
 
 if uploaded_files:
     cols = st.columns(len(uploaded_files))
     for idx, f in enumerate(uploaded_files):
         cols[idx].image(f, caption=f.name)
 
-analyze = st.button("🔍 Analyze Case", use_container_width=True)
+analyze = st.button("🔍 Dual-Pass Analyze", use_container_width=True)
 
-# ---------- ÇİFT AŞAMALI (DUAL-PASS) ANALİZ ----------
+# ---------- ÇİFT GEÇİŞLİ ANALİZ MANTIĞI ----------
 if analyze:
     if not uploaded_files:
-        st.error("Lütfen resim yükleyin.")
+        st.error("Lütfen görüntü yükleyin.")
         st.stop()
 
-    with st.spinner("AI scanning image... (Dual-Pass Phase 1)"):
-        # 1. AŞAMA: Görseli Tarama (Keywords üretme)
-        vision_blocks = [{"type": "text", "text": "Describe the main finding in 3-5 technical keywords for a database search."}]
+    # AŞAMA 1: VISION (Kendi kendine fark etmesi için)
+    with st.spinner("AI scanning image..."):
+        vision_content = [{"type": "text", "text": "Identify the key retinal finding. Respond with 3 technical words only (e.g. 'combined hamartoma' or 'torpedo maculopathy')."}]
         for f in uploaded_files:
-            vision_blocks.append({"type": "image_url", "image_url": {"url": file_to_data_url(f)}})
+            vision_content.append({"type": "image_url", "image_url": {"url": file_to_data_url(f)}})
         
-        vision_resp = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": vision_blocks}],
-            max_tokens=30
-        )
-        ai_keywords = vision_resp.choices[0].message.content
+        v_resp = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": vision_content}], max_tokens=20)
+        ai_keywords = v_resp.choices[0].message.content
         st.info(f"AI Keywords: {ai_keywords}")
 
-    with st.spinner("Searching RAG and Finalizing... (Phase 2)"):
-        # 2. AŞAMA: RAG Araması (Kullanıcı metni + AI anahtar kelimeleri)
-        full_query = f"{clinical_text} {ai_keywords}"
-        rag_content = search_rag(full_query, client, index, meta)
+    # AŞAMA 2: RAG ARAMASI
+    with st.spinner("Searching RAG database..."):
+        # Hem kullanıcı metnini hem AI'nın bulduğu kelimeyi aratıyoruz
+        combined_query = f"{clinical_text} {ai_keywords}"
+        rag_context = search_rag(combined_query, client, index, meta)
 
-        # Görünürlük testi için RAG kutusu
-        with st.expander("📚 RAG Search Results (See what AI found)"):
-            st.write(rag_content if rag_content else "No cards found.")
+        with st.expander("📚 RAG Search Results (VERİTABANI KONTROLÜ)"):
+            if rag_context:
+                st.success("Veritabanından bilgi çekildi!")
+                st.markdown(rag_context)
+            else:
+                st.warning("Veritabanında eşleşme bulunamadı. CNRKR123456 yazdığınızdan emin olun.")
 
-        # 3. AŞAMA: Final Rapor
+    # AŞAMA 3: FİNAL RAPOR
+    with st.spinner("Generating final report..."):
         final_blocks = []
-        if rag_content:
-            final_blocks.append({"type": "text", "text": f"### REFERENCE CARDS (RAG):\n{rag_content}\n\n---"})
+        if rag_context:
+            final_blocks.append({"type": "text", "text": f"### REFERENCE CARDS (RAG):\n{rag_context}\n\n---"})
         
-        final_blocks.append({"type": "text", "text": f"CLINICAL DATA: {clinical_text}\nAI SCAN: {ai_keywords}"})
+        final_blocks.append({"type": "text", "text": f"CLINICAL DATA: {clinical_text}\nVISION SCAN: {ai_keywords}"})
         for f in uploaded_files:
             final_blocks.append({"type": "image_url", "image_url": {"url": file_to_data_url(f)}})
 
-        try:
-            resp = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": final_blocks}],
-                max_tokens=2500
-            )
-            st.markdown(resp.choices[0].message.content)
-        except Exception as e:
-            st.error(f"Error: {e}")
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": final_blocks}],
+            max_tokens=2500
+        )
+        st.markdown(resp.choices[0].message.content)
+
+st.markdown("---")
+st.caption("Educational use only.")
