@@ -1,4 +1,4 @@
 streamlit
 openai
-numpy
 faiss-cpu
+numpy
