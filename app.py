@@ -8,9 +8,10 @@ from openai import OpenAI
 # ---------- Sayfa Yapılandırması ----------
 st.set_page_config(page_title="RetinaGPT", page_icon="👁️")
 
-# ---------- RAG FONKSİYONLARI (YENİ) ----------
+# ---------- RAG FONKSİYONLARI (Yeni Eklendi) ----------
 @st.cache_resource
 def load_rag_assets():
+    """FAISS indexini ve metadata dosyalarını yükler."""
     try:
         index = faiss.read_index("data/index.faiss")
         with open("data/meta.json", "r", encoding="utf-8") as f:
@@ -21,21 +22,28 @@ def load_rag_assets():
         return None, None
 
 def get_embedding(text, client):
+    """Metni vektöre çevirir."""
     text = text.replace("\n", " ")
     return client.embeddings.create(input=[text], model="text-embedding-3-small").data[0].embedding
 
 def search_rag(query_text, client, index, meta, k=3):
+    """Klinik metne göre veritabanında arama yapar."""
     if not index or not meta or not query_text.strip():
         return ""
+    
     query_vector = get_embedding(query_text, client)
     distances, indices = index.search(np.array([query_vector]).astype('float32'), k)
+    
     results = []
     for i in indices[0]:
         if i != -1 and i < len(meta):
-            results.append(meta[i].get("text", ""))
+            # meta.json içindeki "text" alanını alıyoruz
+            content = meta[i].get("text", "")
+            results.append(content)
+    
     return "\n\n".join(results)
 
-# ---------- ORİJİNAL SYSTEM PROMPT (DOKUNULMADI) ----------
+# ---------- SENİN ORİJİNAL SYSTEM PROMPT'UN (Tam Metin) ----------
 SYSTEM_PROMPT = """
 You are RetinaGPT, a retina subspecialty educational discussion and decision-support system.
 
@@ -154,21 +162,22 @@ FINAL OUTPUT FORMAT (always)
 13) Educational limitations statement
 """
 
-# ---------- API Key ve Dosyalar ----------
+# ---------- API Key ve Kurulum ----------
 api_key = st.secrets.get("OPENAI_API_KEY", None)
 if not api_key:
-    st.error("OPENAI_API_KEY not found.")
+    st.error("OPENAI_API_KEY not found. Add it in Streamlit -> App -> Settings -> Secrets.")
     st.stop()
 
 client = OpenAI(api_key=api_key)
 index, meta = load_rag_assets()
 
+# ---------- Yardımcılar ----------
 def file_to_data_url(file) -> str:
     b = file.getvalue()
     b64 = base64.b64encode(b).decode("utf-8")
     return f"data:{file.type};base64,{b64}"
 
-# ---------- UI (ORİJİNAL TASARIM) ----------
+# ---------- SENİN ORİJİNAL UI TASARIMIN ----------
 st.markdown(
     """
     <div style="text-align: center;">
@@ -201,31 +210,42 @@ if uploaded_files:
 
 analyze = st.button("🔍 Analyze", use_container_width=True)
 
+# ---------- ANALİZ MANTIĞI ----------
 if analyze:
     if not uploaded_files:
         st.error("Please upload at least one image.")
         st.stop()
 
-    with st.spinner("Searching RAG and analyzing..."):
-        # 1. RAG'da Ara (Klinik metin kullanılarak meta.json'dan bilgi çekilir)
-        retrieved_cards = search_rag(clinical_text, client, index, meta)
+    with st.spinner("Analyzing with RAG..."):
+        # 1. RAG'da Ara (Klinik metin kullanılarak meta.json'dan en yakın bilgi çekilir)
+        rag_context = ""
+        if clinical_text.strip():
+            rag_context = search_rag(clinical_text, client, index, meta)
         
-        # 2. Mesajları Oluştur
+        # 2. Mesaj Yapısını Kur (Vision ve Metin bir arada)
         user_payload = (clinical_text or "").strip() or "No clinical details provided."
         
+        # İçerik bloklarını oluşturuyoruz
         content_blocks = []
         
-        # Eğer RAG sonucu varsa prompta enjekte et
-        if retrieved_cards:
-            content_blocks.append({"type": "text", "text": f"### REFERENCE CARDS (RAG):\n{retrieved_cards}\n\n---"})
+        # Eğer RAG verisi bulunduysa en başa ekle (GPT-4o bunu REFERENCE KNOWLEDGE olarak görecek)
+        if rag_context:
+            content_blocks.append({
+                "type": "text", 
+                "text": f"### REFERENCE CARDS (RAG):\n{rag_context}\n\n---"
+            })
             
         content_blocks.append({"type": "text", "text": f"CLINICAL DATA: {user_payload}"})
-        content_blocks.append({"type": "text", "text": "Interpret these images as a single case and follow all STEPs in your instructions."})
+        content_blocks.append({"type": "text", "text": "Multiple images uploaded. Interpret them as a single case and integrate findings across modalities. Please follow all 8 STEPs defined in system prompt."})
 
+        # Resimleri ekle
         for i, f in enumerate(uploaded_files, start=1):
-            content_blocks.append({"type": "image_url", "image_url": {"url": file_to_data_url(f)}})
+            content_blocks.append({
+                "type": "image_url",
+                "image_url": {"url": file_to_data_url(f)}
+            })
 
-        # 3. API Çağrısı (GPT-4o Vision API yapısına uygun)
+        # 3. OpenAI GPT-4o Vision API Çağrısı
         try:
             resp = client.chat.completions.create(
                 model="gpt-4o",
@@ -235,6 +255,12 @@ if analyze:
                 ],
                 max_tokens=2500
             )
+            # Yanıtı ekrana yazdır
             st.markdown(resp.choices[0].message.content)
+            
         except Exception as e:
-            st.error(f"Error during analysis: {e}")
+            st.error(f"An error occurred: {e}")
+
+# Sayfa sonu uyarı metni
+st.markdown("---")
+st.caption("Educational use only. Not medical advice.")
