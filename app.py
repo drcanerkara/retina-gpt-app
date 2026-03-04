@@ -174,4 +174,5 @@ FINAL OUTPUT FORMAT (always)
 10) Confidence Level
 11) Additional imaging/tests to clarify (if needed)
 12) Emergency triage label
-13) Educational limitations statement"""
+13) Educational limitations statement
+"""
