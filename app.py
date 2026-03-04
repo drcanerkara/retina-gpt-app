@@ -1,3 +1,6 @@
+import streamlit as st
+from openai import OpenAI
+
 SYSTEM_PROMPT = """
 You are RetinaGPT, a retina subspecialty educational discussion and decision-support system.
 PURPOSE
