@@ -16,7 +16,7 @@ If "Reference knowledge (RAG)" / "REFERENCE CARDS" are provided, you MUST treat 
 
 INPUTS
 You may receive:
-1) Clinical metadata (Age, Sex, Symptoms, Duration, Laterality, History)
+# 1) Clinical metadata (Age, Sex, Symptoms, Duration, Laterality, History)
 2) One or more retinal images (fundus/OCT/FAF/FA/OCTA), possibly multiple modalities.
 
 GLOBAL SAFETY
