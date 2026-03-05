@@ -23,7 +23,10 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 gemini_client = None
 if GEMINI_API_KEY:
-    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    gemini_client = genai.Client(
+        api_key=GEMINI_API_KEY,
+        http_options={"api_version": "v1"}
+    )
 
 # -----------------------------
 # Sidebar settings
