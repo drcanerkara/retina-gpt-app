@@ -2,9 +2,17 @@ import os
 import json
 import base64
 from typing import List, Dict, Any, Optional, Tuple
+from io import BytesIO
 
 import streamlit as st
 from openai import OpenAI
+from PIL import Image, ImageOps, ImageFilter
+
+# Optional OpenCV for CLAHE (recommended)
+try:
+    import cv2  # type: ignore
+except Exception:
+    cv2 = None
 
 # Optional RAG deps (only if you use local FAISS index)
 try:
@@ -26,7 +34,7 @@ MAX_RAG_HITS = int(os.getenv("MAX_RAG_HITS", "6"))
 st.set_page_config(page_title=APP_TITLE, page_icon="👁️", layout="wide")
 
 # -----------------------------
-# SYSTEM PROMPT (v2) - UPDATED to avoid refusal
+# SYSTEM PROMPT (v2)
 # -----------------------------
 SYSTEM_PROMPT = """
 You are RetinaGPT v2, a retina subspecialty educational imaging discussion and decision-support system.
@@ -171,6 +179,41 @@ def normalize_probs(items: List[Dict[str, Any]], key: str = "probability") -> Li
     return items
 
 
+def preprocess_fundus_for_ai(file_bytes: bytes) -> bytes:
+    """
+    Mild enhancement to help the model see global patterns.
+    - If OpenCV is available: CLAHE on luminance + light unsharp mask
+    - Else: PIL autocontrast + unsharp
+    Returns PNG bytes.
+    """
+    img = Image.open(BytesIO(file_bytes)).convert("RGB")
+
+    if cv2 is not None:
+        import numpy as np  # type: ignore
+        arr = np.array(img)
+
+        lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
+        l, a, b = cv2.split(lab)
+
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l2 = clahe.apply(l)
+
+        lab2 = cv2.merge([l2, a, b])
+        rgb2 = cv2.cvtColor(lab2, cv2.COLOR_LAB2RGB)
+
+        blur = cv2.GaussianBlur(rgb2, (0, 0), 1.2)
+        sharp = cv2.addWeighted(rgb2, 1.25, blur, -0.25, 0)
+
+        out = Image.fromarray(sharp)
+    else:
+        out = ImageOps.autocontrast(img, cutoff=1)
+        out = out.filter(ImageFilter.UnsharpMask(radius=2, percent=120, threshold=3))
+
+    buf = BytesIO()
+    out.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
 # -----------------------------
 # RAG (FAISS) - optional
 # -----------------------------
@@ -249,27 +292,50 @@ def rag_retrieve(client: OpenAI, query: str, k: int = MAX_RAG_HITS) -> Tuple[str
 
 
 # -----------------------------
-# VISUAL PATTERN EXTRACTION (only runs when Analyze is clicked)
+# RETINA FEATURE EXTRACTOR (structured) - runs only when Analyze is clicked
 # -----------------------------
-def extract_patterns_for_rag(
+def extract_retina_features_for_rag(
     client: OpenAI,
     model_name: str,
     clinical_text: str,
     image_content: List[Dict[str, Any]],
-) -> str:
-    system = (
-        "You are a retina imaging pattern extractor for DE-IDENTIFIED ophthalmic images. "
-        "Describe morphology ONLY (no diagnosis). "
-        "Return 8-15 bullet keywords: lesion shape, location (temporal to fovea/peripapillary), "
-        "pigmentation, borders, atrophy, hemorrhage/exudates, traction, fluid, "
-        "and whether it appears RPE-level vs choroidal vs retinal."
-    )
+) -> Dict[str, Any]:
+    """
+    Extract retina-specific VISUAL FEATURES (no diagnosis), returns dict.
+    Used to build a stronger RAG query.
+    """
+    system = """
+You are a RETINAL IMAGING FEATURE EXTRACTOR for DE-IDENTIFIED ophthalmic images.
+These are NOT faces/people. Do NOT identify any person.
+DO NOT diagnose. DO NOT name diseases.
+
+Task: Extract VISUAL FEATURES as structured JSON.
+
+Return STRICT JSON ONLY with this schema:
+{
+  "modality_guess": ["Fundus","OCT","FAF","FA","ICGA","OCTA"],
+  "global_distribution": "FOCAL|MULTIFOCAL|DIFFUSE|UNCERTAIN",
+  "fundus_pigmentation": "NORMAL|REDUCED|DIFFUSE_HYPOPIGMENTATION|PATCHY|UNCERTAIN",
+  "choroidal_vessel_visibility": "NORMAL|INCREASED|VERY_PROMINENT|UNCERTAIN",
+  "macular_reflex": "NORMAL|REDUCED|ABSENT|UNCERTAIN",
+  "vascular_pattern": ["NORMAL","TORTUOUS","TELANGIECTATIC","ATTENUATED","SHEATHING","UNCERTAIN"],
+  "hemorrhage_exudates": "PRESENT|ABSENT|UNCERTAIN",
+  "lesion_shape_keywords": ["..."],
+  "lesion_location_keywords": ["..."],
+  "outer_retina_rpe_clues": ["RPE_ATROPHY","HYPERTRANSMISSION_SUSPECTED","PIGMENT_MOTTLE","NONE","UNCERTAIN"],
+  "quality_notes": ["..."]
+}
+
+Rules:
+- If unsure, use UNCERTAIN.
+- Use concise keywords (e.g., "torpedo/teardrop-shaped", "temporal to fovea", "peripapillary", "mid-periphery").
+"""
 
     user_text = (
-        "DE-IDENTIFIED RETINAL IMAGES (not faces/people).\n\n"
+        "DE-IDENTIFIED RETINAL IMAGES.\n"
+        "Extract features ONLY.\n\n"
         "CLINICAL:\n"
         + (clinical_text.strip() if clinical_text.strip() else "(none)")
-        + "\n\nOUTPUT FORMAT:\n- keyword\n- keyword\n(no extra text)"
     )
 
     msgs: List[Dict[str, Any]] = [
@@ -282,11 +348,24 @@ def extract_patterns_for_rag(
             model=model_name,
             messages=msgs,
             temperature=0.0,
-            max_tokens=250,
+            max_tokens=450,
         )
-        return (resp.choices[0].message.content or "").strip()
+        txt = (resp.choices[0].message.content or "").strip()
+        return json.loads(txt)
     except Exception:
-        return ""
+        return {
+            "modality_guess": [],
+            "global_distribution": "UNCERTAIN",
+            "fundus_pigmentation": "UNCERTAIN",
+            "choroidal_vessel_visibility": "UNCERTAIN",
+            "macular_reflex": "UNCERTAIN",
+            "vascular_pattern": ["UNCERTAIN"],
+            "hemorrhage_exudates": "UNCERTAIN",
+            "lesion_shape_keywords": [],
+            "lesion_location_keywords": [],
+            "outer_retina_rpe_clues": ["UNCERTAIN"],
+            "quality_notes": ["extract_failed"],
+        }
 
 
 # -----------------------------
@@ -344,6 +423,7 @@ with st.sidebar:
     model = st.selectbox("Model", options=model_options, index=0)
     use_rag = st.checkbox("Enable RAG (FAISS)", value=True)
     rag_k = st.slider("RAG hits (k)", min_value=2, max_value=10, value=MAX_RAG_HITS, step=1)
+    preprocess_on = st.checkbox("Preprocess images (CLAHE)", value=True)
     st.divider()
     if st.button("🧹 New case (reset memory)"):
         st.session_state.case_id += 1
@@ -383,11 +463,11 @@ with col2:
     run = st.button("🔎 Analyze / Continue this case", type="primary")
     st.divider()
 
-    st.subheader("RAG status")
-    st.caption("RAG and image-keyword extraction run only when you click Analyze (to keep the app fast).")
+    st.subheader("Debug")
+    st.caption("Feature extraction + RAG retrieval run only when you click Analyze.")
 
-    with st.expander("Show extracted image keywords (debug)", expanded=False):
-        st.text(st.session_state.pattern_keywords if st.session_state.pattern_keywords else "(Run Analyze to generate keywords)")
+    with st.expander("Show extracted features (debug)", expanded=False):
+        st.text(st.session_state.pattern_keywords if st.session_state.pattern_keywords else "(Run Analyze to generate features)")
 
     with st.expander("Show retrieved cards (debug)", expanded=False):
         st.text("(Run Analyze to retrieve cards)")
@@ -396,14 +476,24 @@ with col2:
 # -----------------------------
 # RUN ANALYSIS
 # -----------------------------
-def build_user_payload_images(uploaded_files) -> List[Dict[str, Any]]:
+def build_user_payload_images(uploaded_files, preprocess: bool = False) -> List[Dict[str, Any]]:
     content: List[Dict[str, Any]] = []
     if not uploaded_files:
         return content
+
     for f in uploaded_files:
-        mime = f.type or "image/jpeg"
-        b64 = b64_image(f.getvalue(), mime)
+        mime_in = f.type or "image/jpeg"
+        raw = f.getvalue()
+
+        if preprocess:
+            raw2 = preprocess_fundus_for_ai(raw)  # PNG bytes
+            mime_out = "image/png"
+            b64 = b64_image(raw2, mime_out)
+        else:
+            b64 = b64_image(raw, mime_in)
+
         content.append({"type": "image_url", "image_url": {"url": b64}})
+
     return content
 
 
@@ -429,7 +519,6 @@ def call_model(
     for m in chat_history[-6:]:
         messages.append(m)
 
-    # IMPORTANT: make it explicit these are de-identified retinal images
     user_text = (
         "DE-IDENTIFIED OPHTHALMIC IMAGES (retina) — not faces/people.\n"
         "Task: describe imaging findings and provide educational differential diagnosis.\n\n"
@@ -469,23 +558,26 @@ def call_model(
 
 
 if run:
-    img_payload = build_user_payload_images(files)
+    img_payload = build_user_payload_images(files, preprocess=preprocess_on)
 
     if not clinical_text.strip() and not img_payload:
         st.warning("Clinical metadata veya en az 1 görüntü yüklemen daha iyi olur. Yine de çalıştırıyorum.")
 
-    # 1) Extract image pattern keywords ONLY on Analyze click
+    # 1) Structured feature extraction ONLY on Analyze click
     st.session_state.pattern_keywords = ""
+    features: Dict[str, Any] = {}
+
     if files and use_rag and img_payload:
         extractor_model = "gpt-4o" if model == "gpt-4o-mini" else model
-        st.session_state.pattern_keywords = extract_patterns_for_rag(
+        features = extract_retina_features_for_rag(
             client=client,
             model_name=extractor_model,
             clinical_text=clinical_text,
             image_content=img_payload,
         )
+        st.session_state.pattern_keywords = json.dumps(features, ensure_ascii=False, indent=2)
 
-    # 2) Retrieve RAG context ONLY on Analyze click
+    # 2) Retrieve RAG context ONLY on Analyze click (stronger query)
     rag_context_runtime = ""
     rag_status_runtime: Dict[str, Any] = {"enabled": False, "hits": 0, "index_dim": None, "error": None}
 
@@ -493,9 +585,22 @@ if run:
         retrieval_query = clinical_text.strip()
         if st.session_state.case_notes:
             retrieval_query += "\n\nPrior summary: " + st.session_state.case_notes
-        if st.session_state.pattern_keywords:
-            retrieval_query += "\n\nIMAGE PATTERN KEYWORDS:\n" + st.session_state.pattern_keywords
-        retrieval_query += "\n\nretina fundus lesion macula differential diagnosis imaging"
+
+        if features:
+            retrieval_query += "\n\nVISUAL FEATURES:\n"
+            retrieval_query += f"global_distribution: {features.get('global_distribution')}\n"
+            retrieval_query += f"fundus_pigmentation: {features.get('fundus_pigmentation')}\n"
+            retrieval_query += f"choroidal_vessel_visibility: {features.get('choroidal_vessel_visibility')}\n"
+            retrieval_query += f"macular_reflex: {features.get('macular_reflex')}\n"
+            retrieval_query += f"vascular_pattern: {', '.join(features.get('vascular_pattern', []))}\n"
+            retrieval_query += f"hemorrhage_exudates: {features.get('hemorrhage_exudates')}\n"
+            retrieval_query += f"lesion_shape: {', '.join(features.get('lesion_shape_keywords', []))}\n"
+            retrieval_query += f"lesion_location: {', '.join(features.get('lesion_location_keywords', []))}\n"
+            retrieval_query += f"outer_retina_rpe: {', '.join(features.get('outer_retina_rpe_clues', []))}\n"
+
+        # IMPORTANT: bias retrieval toward congenital/inherited patterns when applicable
+        retrieval_query += "\n\nretina fundus pattern congenital inherited dystrophy foveal hypoplasia albinism hypopigmentation nystagmus"
+
         rag_context_runtime, rag_status_runtime = rag_retrieve(client, retrieval_query, k=rag_k)
 
         if rag_status_runtime.get("enabled"):
@@ -508,8 +613,8 @@ if run:
         if rag_status_runtime.get("error"):
             st.error(f"RAG error: {rag_status_runtime['error']}")
 
-        with st.expander("Show extracted image keywords (debug)", expanded=False):
-            st.text(st.session_state.pattern_keywords if st.session_state.pattern_keywords else "(No extracted keywords)")
+        with st.expander("Show extracted features (debug)", expanded=False):
+            st.text(st.session_state.pattern_keywords if st.session_state.pattern_keywords else "(No extracted features)")
 
         with st.expander("Show retrieved cards (debug)", expanded=False):
             st.text(rag_context_runtime if rag_context_runtime else "(No RAG context)")
