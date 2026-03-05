@@ -295,7 +295,6 @@ def rag_retrieve(client: OpenAI, query: str, k: int = MAX_RAG_HITS) -> Tuple[str
 # RETINA FEATURE EXTRACTOR (structured) - runs only when Analyze is clicked
 # -----------------------------
 def extract_retina_features_for_rag(
-    def extract_retina_features_for_rag(
     client: OpenAI,
     model_name: str,
     clinical_text: str,
