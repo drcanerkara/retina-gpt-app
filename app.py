@@ -230,7 +230,14 @@ def vision_extract(
         ],
         temperature=0.0,
         max_output_tokens=600,
-        response_format={"type": "json_schema", "json_schema": VISION_SCHEMA},
+        response_format={
+    "type": "json_schema",
+    "json_schema": {
+        "name": VISION_SCHEMA["name"],
+        "schema": VISION_SCHEMA["schema"],
+        "strict": True
+    }
+},
     )
 
     # Structured output comes back as parsed JSON
