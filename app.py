@@ -242,7 +242,7 @@ def rag_retrieve(client: OpenAI, query: str, k: int = MAX_RAG_HITS) -> Tuple[str
 
 
 # -----------------------------
-# VISUAL PATTERN EXTRACTION (to improve RAG)
+# VISUAL PATTERN EXTRACTION (only runs when Analyze is clicked)
 # -----------------------------
 def extract_patterns_for_rag(
     client: OpenAI,
@@ -376,61 +376,15 @@ with col1:
 
 with col2:
     st.subheader("RAG status")
-    rag_context = ""
-    rag_status: Dict[str, Any] = {"enabled": False, "hits": 0, "index_dim": None, "error": None}
-
-    # -----------------------------
-    # Build retrieval query (NOW includes image-derived keywords)
-    # -----------------------------
-    retrieval_query = clinical_text.strip()
-    if st.session_state.case_notes:
-        retrieval_query += "\n\nPrior summary: " + st.session_state.case_notes
-
-    # Extract image pattern keywords to improve retrieval
-    st.session_state.pattern_keywords = ""
-    if files:
-        # build images payload for extractor
-        def _b64_image(file_bytes: bytes, mime: str) -> str:
-            return f"data:{mime};base64,{base64.b64encode(file_bytes).decode('utf-8')}"
-
-        tmp_img_payload: List[Dict[str, Any]] = []
-        for f in files:
-            mime = f.type or "image/jpeg"
-            b64 = _b64_image(f.getvalue(), mime)
-            tmp_img_payload.append({"type": "image_url", "image_url": {"url": b64}})
-
-        extractor_model = "gpt-4o" if model == "gpt-4o-mini" else model
-        st.session_state.pattern_keywords = extract_patterns_for_rag(
-            client=client,
-            model_name=extractor_model,
-            clinical_text=clinical_text,
-            image_content=tmp_img_payload,
-        )
-
-    if st.session_state.pattern_keywords:
-        retrieval_query += "\n\nIMAGE PATTERN KEYWORDS:\n" + st.session_state.pattern_keywords
-
-    # Add stable retina retrieval anchors
-    retrieval_query += "\n\nretina fundus lesion macula differential diagnosis imaging"
-
-    if use_rag:
-        rag_context, rag_status = rag_retrieve(client, retrieval_query, k=rag_k)
-
-    if rag_status.get("enabled"):
-        st.success(
-            f"RAG enabled: FAISS index + meta.json loaded. Hits: {rag_status.get('hits')} | dim: {rag_status.get('index_dim')}"
-        )
-    else:
-        st.warning("RAG disabled or not available (check data/index.faiss + data/meta.json and faiss-cpu).")
-
-    if rag_status.get("error"):
-        st.error(f"RAG error: {rag_status['error']}")
+    st.caption("RAG and image-keyword extraction will run only when you click **Analyze** to keep the app fast.")
+    st.divider()
 
     with st.expander("Show extracted image keywords (debug)", expanded=False):
-        st.text(st.session_state.pattern_keywords if st.session_state.pattern_keywords else "(No extracted keywords)")
+        st.text(st.session_state.pattern_keywords if st.session_state.pattern_keywords else "(Run Analyze to generate keywords)")
 
+    # Note: We show retrieved cards after Analyze
     with st.expander("Show retrieved cards (debug)", expanded=False):
-        st.text(rag_context if rag_context else "(No RAG context)")
+        st.text("(Run Analyze to retrieve cards)")
 
     st.divider()
     st.subheader("Analyze")
@@ -511,17 +465,66 @@ if run:
     if not clinical_text.strip() and not img_payload:
         st.warning("Clinical metadata veya en az 1 görüntü yüklemen daha iyi olur. Yine de çalıştırıyorum.")
 
+    # -----------------------------
+    # 1) Extract image pattern keywords ONLY on Analyze click
+    # -----------------------------
+    st.session_state.pattern_keywords = ""
+    if files and use_rag and img_payload:
+        extractor_model = "gpt-4o" if model == "gpt-4o-mini" else model
+        st.session_state.pattern_keywords = extract_patterns_for_rag(
+            client=client,
+            model_name=extractor_model,
+            clinical_text=clinical_text,
+            image_content=img_payload,
+        )
+
+    # -----------------------------
+    # 2) Retrieve RAG context ONLY on Analyze click
+    # -----------------------------
+    rag_context_runtime = ""
+    rag_status_runtime: Dict[str, Any] = {"enabled": False, "hits": 0, "index_dim": None, "error": None}
+
+    if use_rag:
+        retrieval_query = clinical_text.strip()
+        if st.session_state.case_notes:
+            retrieval_query += "\n\nPrior summary: " + st.session_state.case_notes
+        if st.session_state.pattern_keywords:
+            retrieval_query += "\n\nIMAGE PATTERN KEYWORDS:\n" + st.session_state.pattern_keywords
+        retrieval_query += "\n\nretina fundus lesion macula differential diagnosis imaging"
+
+        rag_context_runtime, rag_status_runtime = rag_retrieve(client, retrieval_query, k=rag_k)
+
+        if rag_status_runtime.get("enabled"):
+            st.success(
+                f"RAG enabled: FAISS index + meta.json loaded. "
+                f"Hits: {rag_status_runtime.get('hits')} | dim: {rag_status_runtime.get('index_dim')}"
+            )
+        else:
+            st.warning("RAG disabled or not available (check data/index.faiss + data/meta.json and faiss-cpu).")
+        if rag_status_runtime.get("error"):
+            st.error(f"RAG error: {rag_status_runtime['error']}")
+
+        with st.expander("Show extracted image keywords (debug)", expanded=False):
+            st.text(st.session_state.pattern_keywords if st.session_state.pattern_keywords else "(No extracted keywords)")
+
+        with st.expander("Show retrieved cards (debug)", expanded=False):
+            st.text(rag_context_runtime if rag_context_runtime else "(No RAG context)")
+
+    # -----------------------------
+    # 3) Call main model with RAG context
+    # -----------------------------
     assistant_text = call_model(
         client=client,
         model_name=model,
         system_prompt=SYSTEM_PROMPT,
-        rag_context=rag_context,
+        rag_context=rag_context_runtime,
         clinical_text=clinical_text,
         image_content=img_payload,
         case_memory=st.session_state.case_notes,
         chat_history=st.session_state.case_history,
     )
 
+    # Save history (text-only for stability)
     st.session_state.case_history.append(
         {
             "role": "user",
@@ -544,6 +547,7 @@ if run:
             parsed["differential"] = normalize_probs(parsed["differential"], "probability")
         update_case_memory(parsed)
 
+    # Display
     st.subheader("Assistant output")
     st.markdown(assistant_text)
 
