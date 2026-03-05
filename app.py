@@ -1,17 +1,21 @@
 import os
+import json
 import base64
 import streamlit as st
 from openai import OpenAI
 
-# Gemini (new SDK)
+# Gemini (google-genai)
 from google import genai
+from google.genai import types
 
-st.set_page_config(page_title="RetinaGPT - Dual Opinion", page_icon="👁️", layout="wide")
-st.title("👁️ Dual-LLM Retina Opinions (ChatGPT + Gemini)")
+st.set_page_config(page_title="RetinaGPT (Dual Opinion)", page_icon="👁️", layout="wide")
+st.title("👁️ RetinaGPT — Dual Opinion (OpenAI + Gemini)")
 
-# -----------------------------
+st.caption("Educational only. Not medical advice.")
+
+# ---------------------------
 # Keys
-# -----------------------------
+# ---------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY", None)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
 
@@ -23,29 +27,44 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 gemini_client = None
 if GEMINI_API_KEY:
-    gemini_client = genai.Client(
-        api_key=GEMINI_API_KEY,
-        http_options={"api_version": "v1"}
-    )
+    # google-genai client
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# -----------------------------
+# ---------------------------
 # Sidebar settings
-# -----------------------------
+# ---------------------------
 with st.sidebar:
     st.header("Models")
 
     openai_vision_model = st.text_input("OpenAI vision model", value="gpt-4o")
-    openai_consensus_model = st.text_input("OpenAI consensus model", value="gpt-4o-mini")
-
-    gemini_model = st.text_input("Gemini model", value="gemini-1.5-flash")
-    use_gemini = st.checkbox("Enable Gemini", value=True)
+    openai_arbiter_model = st.text_input("OpenAI arbiter model", value="gpt-4o-mini")
 
     st.divider()
-    st.caption("This tool is educational only. Not medical advice.")
+    use_gemini = st.checkbox("Enable Gemini", value=True)
 
-# -----------------------------
+    # IMPORTANT: gemini-1.5-flash may be gone in your API/version -> default to a newer one
+    # You can click "List Gemini models" to find the exact ones available to your key.
+    gemini_model = st.text_input("Gemini model", value="gemini-3-flash-preview")
+
+    if st.button("List Gemini models (debug)") and gemini_client:
+        try:
+            models = gemini_client.models.list()
+            names = []
+            for m in models:
+                # Different SDK versions expose fields differently; keep it defensive
+                n = getattr(m, "name", None) or str(m)
+                names.append(n)
+            st.write("Available Gemini models for this key:")
+            st.code("\n".join(names[:200]))
+        except Exception as e:
+            st.error(f"ListModels failed: {e}")
+
+    st.divider()
+    st.caption("Tip: If Gemini returns 404 NOT_FOUND, your model name is not available for your API/key.")
+
+# ---------------------------
 # Inputs
-# -----------------------------
+# ---------------------------
 clinical = st.text_area(
     "Clinical info (age, sex, symptoms, duration, laterality, history)",
     height=140,
@@ -53,179 +72,164 @@ clinical = st.text_area(
 )
 
 uploads = st.file_uploader(
-    "Upload retinal images (Fundus / OCT / FAF / FA / OCTA)",
+    "Upload retinal images (jpg/png)",
     type=["jpg", "jpeg", "png", "webp"],
     accept_multiple_files=True
 )
 
 colA, colB = st.columns([1, 1])
-
 with colA:
-    run = st.button("Analyze", type="primary")
-
+    analyze_btn = st.button("Analyze", type="primary", use_container_width=True)
 with colB:
-    st.button("Reset (refresh page)")
+    st.write("")
 
-# -----------------------------
+# ---------------------------
 # Helpers
-# -----------------------------
-def openai_data_url(file) -> str:
+# ---------------------------
+def openai_image_block(file) -> dict:
     b64 = base64.b64encode(file.getvalue()).decode("utf-8")
-    return f"data:{file.type};base64,{b64}"
+    return {
+        "type": "input_image",
+        "image_url": f"data:{file.type};base64,{b64}",
+    }
 
+def safe_json_loads(s: str):
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
+
+# ---------------------------
+# OpenAI opinion (free-form text OR JSON)
+# ---------------------------
 def call_openai_opinion(clinical_text: str, files):
-    """
-    Returns free-text 'expert opinion' from OpenAI vision model (no JSON).
-    """
-    content = [
-        {
-            "type": "input_text",
-            "text": f"""
-You are a retina subspecialist. Provide an EDUCATIONAL imaging-based opinion.
+    prompt = f"""
+You are a retina specialist. Analyze the retinal image(s) and clinical info.
+Return an EDUCATIONAL assessment (not medical advice).
 
-Rules:
-- Describe morphology first, then give a ranked differential.
-- State confidence and key discriminators.
-- If information is insufficient, say what additional imaging/clinical detail would change your ranking.
-- Do NOT output JSON. Output clear structured text with headings.
-
+Format:
+1) Key imaging findings (morphology-first, modality-specific if possible)
+2) Most likely diagnosis (ranked top 3) with brief justification
+3) Important differentials to exclude + what would help (OCT/FAF/OCTA/FA etc.)
+4) Red flags / urgency (educational)
+5) If uncertain, say why.
 Clinical info:
-{clinical_text if clinical_text else "(none provided)"}
+{clinical_text if clinical_text.strip() else "(none provided)"}
 """
-        }
-    ]
 
+    content = [{"type": "input_text", "text": prompt}]
     for f in files:
-        content.append(
-            {"type": "input_image", "image_url": openai_data_url(f), "detail": "high"}
-        )
+        content.append(openai_image_block(f))
 
-    # Use Responses API style to match current best practice
+    # Responses API (recommended)
     resp = openai_client.responses.create(
         model=openai_vision_model,
         input=[{"role": "user", "content": content}],
-        temperature=0
+        temperature=0,
     )
     return resp.output_text
 
+# ---------------------------
+# Gemini opinion
+# ---------------------------
 def call_gemini_opinion(clinical_text: str, files):
-    """
-    Returns free-text 'expert opinion' from Gemini (no JSON).
-    Uses a simple contents list (text + inline image bytes) to avoid types.Part churn.
-    """
     if not gemini_client:
         return None
 
-    # Build "contents" as a list of parts (string + images).
-    # google-genai accepts bytes image parts via dict with inline_data.
-    contents = []
-
     prompt = f"""
-You are a retina subspecialist. Provide an EDUCATIONAL imaging-based opinion.
+You are a retina specialist. Analyze the retinal image(s) and clinical info.
+Return an EDUCATIONAL assessment (not medical advice).
 
-Rules:
-- Describe morphology first, then give a ranked differential.
-- State confidence and key discriminators.
-- If information is insufficient, say what additional imaging/clinical detail would change your ranking.
-- Do NOT output JSON. Output clear structured text with headings.
-
+Format:
+1) Key imaging findings (morphology-first)
+2) Most likely diagnosis (ranked top 3) + brief justification
+3) Differentials + what additional imaging/clinical info would help
+4) Red flags / urgency (educational)
 Clinical info:
-{clinical_text if clinical_text else "(none provided)"}
+{clinical_text if clinical_text.strip() else "(none provided)"}
 """
-    contents.append(prompt)
+
+    # Newer google-genai patterns: pass text as STRING + images as Part.from_bytes
+    contents = [prompt]
 
     for f in files:
-        contents.append({
-            "inline_data": {
-                "mime_type": f.type,
-                "data": f.getvalue()
-            }
-        })
+        contents.append(
+            types.Part.from_bytes(
+                data=f.getvalue(),
+                mime_type=f.type
+            )
+        )
 
     resp = gemini_client.models.generate_content(
-        model=gemini_model,
-        contents=contents
+        model=gemini_model.strip(),
+        contents=contents,
+        # keep it deterministic
+        config=types.GenerateContentConfig(temperature=0),
     )
-
-    # In many environments resp.text is the final rendered text
+    # Depending on SDK, text may be resp.text
     return getattr(resp, "text", None) or str(resp)
 
-def call_consensus(openai_text: str, gemini_text: str, clinical_text: str):
-    """
-    Uses OpenAI to generate a consensus / arbitration report from both opinions.
-    """
-    user_payload = f"""
-Clinical info:
-{clinical_text if clinical_text else "(none provided)"}
+# ---------------------------
+# Arbiter / Consensus
+# ---------------------------
+def build_consensus_report(clinical_text: str, openai_opinion: str, gemini_opinion: str):
+    payload = {
+        "clinical_info": clinical_text,
+        "openai_opinion": openai_opinion,
+        "gemini_opinion": gemini_opinion,
+    }
 
---- OPENAI (ChatGPT) OPINION ---
-{openai_text}
+    arbiter_prompt = """
+You are a senior retina specialist acting as an arbiter.
+You will be given:
+- Clinical info
+- OpenAI opinion
+- Gemini opinion (may be missing)
 
---- GEMINI OPINION ---
-{gemini_text if gemini_text else "(Gemini not available or failed)"}
-"""
-
-    system = """
-You are a retina subspecialist acting as an independent arbiter.
-
-Task:
-1) Summarize shared findings (agreement).
-2) Summarize disagreements (what differs).
-3) Provide a reasoned consensus: ranked differential with confidence.
-4) If disagreement persists, list the TOP 3 additional inputs (imaging or clinical) most likely to resolve it.
-5) Add a short safety note: educational only, clinical correlation needed.
-
-Style:
-- Formal medical English.
-- Retina subspecialty terminology.
-- No JSON.
+Tasks:
+A) Summarize shared findings (agreement)
+B) Summarize disagreements (what differs) and WHY disagreement may occur
+C) Provide a cautious consensus diagnosis ranking (top 3) with confidence (low/med/high)
+D) Recommend the single most useful next test/imaging to resolve uncertainty
+E) Keep it educational, morphology-first, avoid over-commitment.
 """
 
     resp = openai_client.responses.create(
-        model=openai_consensus_model,
+        model=openai_arbiter_model,
         input=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_payload}
+            {"role": "system", "content": arbiter_prompt},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False, indent=2)},
         ],
-        temperature=0
+        temperature=0,
     )
     return resp.output_text
 
-# -----------------------------
-# UI: Preview uploads
-# -----------------------------
-if uploads:
-    st.subheader("Preview")
-    prev_cols = st.columns(min(3, len(uploads)))
-    for i, f in enumerate(uploads[:3]):
-        with prev_cols[i]:
-            st.image(f, caption=f.name, use_container_width=True)
-
-# -----------------------------
+# ---------------------------
 # Run
-# -----------------------------
-if run:
+# ---------------------------
+if analyze_btn:
     if not uploads:
         st.error("Please upload at least one image.")
         st.stop()
 
-    with st.spinner("Getting ChatGPT opinion..."):
-        openai_op = call_openai_opinion(clinical, uploads)
+    with st.spinner("Running OpenAI vision..."):
+        openai_text = call_openai_opinion(clinical, uploads)
 
-    gemini_op = None
+    gemini_text = None
+    gemini_error = None
+
     if use_gemini:
         if not gemini_client:
-            st.warning("Gemini key not found. Gemini is disabled.")
+            gemini_error = "GEMINI_API_KEY missing, Gemini disabled."
         else:
-            with st.spinner("Getting Gemini opinion..."):
+            with st.spinner("Running Gemini vision..."):
                 try:
-                    gemini_op = call_gemini_opinion(clinical, uploads)
+                    gemini_text = call_gemini_opinion(clinical, uploads)
                 except Exception as e:
-                    gemini_op = None
-                    st.error(f"Gemini call failed: {e}")
+                    gemini_error = str(e)
 
     with st.spinner("Building consensus report..."):
-        consensus = call_consensus(openai_op, gemini_op, clinical)
+        consensus = build_consensus_report(clinical, openai_text, gemini_text)
 
     st.subheader("✅ Consensus Report (Arbiter)")
     st.write(consensus)
@@ -234,12 +238,22 @@ if run:
     c1, c2 = st.columns(2)
 
     with c1:
-        st.subheader("ChatGPT opinion (raw)")
-        st.write(openai_op)
+        st.subheader("OpenAI opinion")
+        st.write(openai_text)
 
     with c2:
-        st.subheader("Gemini opinion (raw)")
-        if gemini_op:
-            st.write(gemini_op)
+        st.subheader("Gemini opinion")
+        if gemini_text:
+            st.write(gemini_text)
         else:
-            st.info("Gemini opinion not available.")
+            st.warning("Gemini opinion not available.")
+            if gemini_error:
+                st.code(gemini_error)
+
+    st.divider()
+    with st.expander("Debug (raw)"):
+        st.write("OpenAI raw:")
+        st.code(openai_text)
+
+        st.write("Gemini raw:")
+        st.code(gemini_text if gemini_text else "(none)")
