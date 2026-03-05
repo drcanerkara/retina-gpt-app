@@ -26,14 +26,20 @@ MAX_RAG_HITS = int(os.getenv("MAX_RAG_HITS", "6"))
 st.set_page_config(page_title=APP_TITLE, page_icon="👁️", layout="wide")
 
 # -----------------------------
-# SYSTEM PROMPT (v2)
+# SYSTEM PROMPT (v2) - UPDATED to avoid refusal
 # -----------------------------
 SYSTEM_PROMPT = """
-You are RetinaGPT v2, a retina subspecialty educational discussion and decision-support system.
+You are RetinaGPT v2, a retina subspecialty educational imaging discussion and decision-support system.
+
+IMPORTANT CONTEXT
+- The user will upload DE-IDENTIFIED ophthalmic images (retinal fundus/OCT/FAF/angiography).
+- These are NOT photos of faces/people. Do NOT attempt to identify any person.
+- Your task is to describe imaging morphology and provide an EDUCATIONAL differential diagnosis.
+- Do NOT provide patient-specific treatment instructions. Not medical advice.
 
 PURPOSE
 Provide structured academic discussion of retinal imaging findings and differential diagnostic reasoning
-for educational purposes only. Not medical advice.
+for educational purposes only.
 
 STYLE
 - Formal medical English, objective, concise.
@@ -42,13 +48,14 @@ STYLE
 
 REFERENCE KNOWLEDGE (RAG)
 If “REFERENCE CARDS” are provided, you MUST treat them as the primary factual source.
-- Use them to refine discriminators, pitfalls, work-up, and management.
+- Use them to refine discriminators, pitfalls, work-up, and management (high level).
 - If imaging suggests a different pattern than retrieved cards, explicitly state discrepancy and explain why.
 - Do not invent facts not supported by imaging/metadata/reference cards.
 
 GLOBAL SAFETY
-- Educational purposes only. No patient-specific medical advice or treatment instructions.
-- For emergency patterns, recommend urgent evaluation but do not prescribe.
+- Educational purposes only.
+- No individualized treatment plans, dosing, or urgent step-by-step instructions.
+- For potentially vision-threatening patterns, suggest prompt clinical evaluation in general terms.
 
 OUTPUT REQUIREMENTS (IMPORTANT)
 You MUST respond in TWO blocks:
@@ -103,7 +110,7 @@ You MUST respond in TWO blocks:
 5) Findings by Modality (Fundus / OCT / FAF / Angiography-OCTA)
 6) Integrated Pattern Discussion
 7) Image Feature Checklist
-8) Most Likely Diagnosis
+8) Most Likely Diagnosis (educational impression)
 9) Differential Diagnosis (ranked, weighted)
 10) Confidence Level
 11) Additional imaging/tests to clarify (if needed)
@@ -250,19 +257,16 @@ def extract_patterns_for_rag(
     clinical_text: str,
     image_content: List[Dict[str, Any]],
 ) -> str:
-    """
-    Quick visual pattern extraction to improve RAG retrieval.
-    Returns keyword-rich morphology ONLY (no diagnosis).
-    """
     system = (
-        "You are a retina imaging pattern extractor. "
-        "Task: describe visible morphology ONLY, no diagnosis. "
-        "Return 8-15 bullet keywords focusing on: lesion shape, location (temporal to fovea, peripapillary), "
-        "pigmentation (hypopigmented/hyperpigmented), borders, associated atrophy, hemorrhage, exudates, "
-        "traction, fluid, and whether lesion appears RPE-level vs choroidal vs retinal."
+        "You are a retina imaging pattern extractor for DE-IDENTIFIED ophthalmic images. "
+        "Describe morphology ONLY (no diagnosis). "
+        "Return 8-15 bullet keywords: lesion shape, location (temporal to fovea/peripapillary), "
+        "pigmentation, borders, atrophy, hemorrhage/exudates, traction, fluid, "
+        "and whether it appears RPE-level vs choroidal vs retinal."
     )
 
     user_text = (
+        "DE-IDENTIFIED RETINAL IMAGES (not faces/people).\n\n"
         "CLINICAL:\n"
         + (clinical_text.strip() if clinical_text.strip() else "(none)")
         + "\n\nOUTPUT FORMAT:\n- keyword\n- keyword\n(no extra text)"
@@ -375,20 +379,18 @@ with col1:
         st.caption("No memory yet. Run analysis to build case memory.")
 
 with col2:
-    st.subheader("RAG status")
-    st.caption("RAG and image-keyword extraction will run only when you click **Analyze** to keep the app fast.")
+    st.subheader("Analyze")
+    run = st.button("🔎 Analyze / Continue this case", type="primary")
     st.divider()
+
+    st.subheader("RAG status")
+    st.caption("RAG and image-keyword extraction run only when you click Analyze (to keep the app fast).")
 
     with st.expander("Show extracted image keywords (debug)", expanded=False):
         st.text(st.session_state.pattern_keywords if st.session_state.pattern_keywords else "(Run Analyze to generate keywords)")
 
-    # Note: We show retrieved cards after Analyze
     with st.expander("Show retrieved cards (debug)", expanded=False):
         st.text("(Run Analyze to retrieve cards)")
-
-    st.divider()
-    st.subheader("Analyze")
-    run = st.button("🔎 Analyze / Continue this case", type="primary")
 
 
 # -----------------------------
@@ -427,7 +429,14 @@ def call_model(
     for m in chat_history[-6:]:
         messages.append(m)
 
-    user_text = "CLINICAL METADATA:\n" + (clinical_text.strip() if clinical_text.strip() else "(not provided)")
+    # IMPORTANT: make it explicit these are de-identified retinal images
+    user_text = (
+        "DE-IDENTIFIED OPHTHALMIC IMAGES (retina) — not faces/people.\n"
+        "Task: describe imaging findings and provide educational differential diagnosis.\n\n"
+        "CLINICAL METADATA:\n"
+        + (clinical_text.strip() if clinical_text.strip() else "(not provided)")
+    )
+
     if st.session_state.last_missing_requests:
         user_text += "\n\nPREVIOUSLY REQUESTED (if still missing):\n"
         for r in st.session_state.last_missing_requests[:5]:
@@ -465,9 +474,7 @@ if run:
     if not clinical_text.strip() and not img_payload:
         st.warning("Clinical metadata veya en az 1 görüntü yüklemen daha iyi olur. Yine de çalıştırıyorum.")
 
-    # -----------------------------
     # 1) Extract image pattern keywords ONLY on Analyze click
-    # -----------------------------
     st.session_state.pattern_keywords = ""
     if files and use_rag and img_payload:
         extractor_model = "gpt-4o" if model == "gpt-4o-mini" else model
@@ -478,9 +485,7 @@ if run:
             image_content=img_payload,
         )
 
-    # -----------------------------
     # 2) Retrieve RAG context ONLY on Analyze click
-    # -----------------------------
     rag_context_runtime = ""
     rag_status_runtime: Dict[str, Any] = {"enabled": False, "hits": 0, "index_dim": None, "error": None}
 
@@ -491,7 +496,6 @@ if run:
         if st.session_state.pattern_keywords:
             retrieval_query += "\n\nIMAGE PATTERN KEYWORDS:\n" + st.session_state.pattern_keywords
         retrieval_query += "\n\nretina fundus lesion macula differential diagnosis imaging"
-
         rag_context_runtime, rag_status_runtime = rag_retrieve(client, retrieval_query, k=rag_k)
 
         if rag_status_runtime.get("enabled"):
@@ -510,9 +514,7 @@ if run:
         with st.expander("Show retrieved cards (debug)", expanded=False):
             st.text(rag_context_runtime if rag_context_runtime else "(No RAG context)")
 
-    # -----------------------------
     # 3) Call main model with RAG context
-    # -----------------------------
     assistant_text = call_model(
         client=client,
         model_name=model,
