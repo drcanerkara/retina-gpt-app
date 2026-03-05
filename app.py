@@ -17,7 +17,7 @@ except Exception:
 # -----------------------------
 # CONFIG
 # -----------------------------
-APP_TITLE = "RetinaGPT (2-pass) — Basic"
+APP_TITLE = "RetinaGPT (2-pass) — Basic (Adaptive)"
 APP_SUBTITLE = "Vision extractor → (optional) RAG → Final reasoning (Educational only)"
 
 DEFAULT_VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4o")
@@ -53,18 +53,21 @@ def json_loads_safe(s: str) -> Optional[Dict[str, Any]]:
 
 
 def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
-    """
-    Fallback extractor: find first {...} block and json.loads.
-    Keeps app from crashing if model outputs extra text.
-    """
+    """Fallback: find first {...} and try json.loads."""
     if not text:
         return None
     start = text.find("{")
     end = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
         return None
-    candidate = text[start : end + 1]
-    return json_loads_safe(candidate)
+    return json_loads_safe(text[start : end + 1])
+
+
+def to_input_content(user_text: str, image_data_urls: List[str]) -> List[Dict[str, Any]]:
+    content: List[Dict[str, Any]] = [{"type": "input_text", "text": user_text}]
+    for url in image_data_urls:
+        content.append({"type": "input_image", "image_url": url, "detail": "high"})
+    return content
 
 
 # -----------------------------
@@ -128,7 +131,6 @@ def rag_retrieve(client: OpenAI, query: str, k: int) -> Tuple[str, Dict[str, Any
         if not hits:
             return ("", status)
 
-        # Keep it short to avoid token bloat
         lines = ["REFERENCE CARDS (RAG):"]
         for n, (title, txt, dist) in enumerate(hits, start=1):
             snippet = txt.strip()
@@ -143,180 +145,41 @@ def rag_retrieve(client: OpenAI, query: str, k: int) -> Tuple[str, Dict[str, Any
 
 
 # -----------------------------
-# SCHEMAS (IMPORTANT: wrapper format!)
-# -----------------------------
-VISION_SCHEMA = {
-    "name": "retina_vision_features",
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "modality_guess": {"type": "array", "items": {"type": "string"}},
-            "global_distribution": {"type": "string"},
-            "fundus_pigmentation": {"type": "string"},
-            "choroidal_vessel_visibility": {"type": "string"},
-            "macular_reflex": {"type": "string"},
-            "foveal_hypoplasia_suspected": {"type": "string"},
-            "optic_disc_notes": {"type": "array", "items": {"type": "string"}},
-            "vascular_pattern": {"type": "array", "items": {"type": "string"}},
-            "hemorrhage_exudates": {"type": "string"},
-            "lesion_shape_keywords": {"type": "array", "items": {"type": "string"}},
-            "lesion_location_keywords": {"type": "array", "items": {"type": "string"}},
-            "outer_retina_rpe_clues": {"type": "array", "items": {"type": "string"}},
-            "key_findings_bullets": {"type": "array", "items": {"type": "string"}},
-            "quality_notes": {"type": "array", "items": {"type": "string"}},
-        },
-        "required": [
-            "modality_guess",
-            "global_distribution",
-            "fundus_pigmentation",
-            "choroidal_vessel_visibility",
-            "macular_reflex",
-            "foveal_hypoplasia_suspected",
-            "optic_disc_notes",
-            "vascular_pattern",
-            "hemorrhage_exudates",
-            "lesion_shape_keywords",
-            "lesion_location_keywords",
-            "outer_retina_rpe_clues",
-            "key_findings_bullets",
-            "quality_notes",
-        ],
-    },
-}
-
-FINAL_SCHEMA = {
-    "name": "retina_final_report",
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "case_summary": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "age": {"type": ["string", "null"]},
-                    "sex": {"type": ["string", "null"]},
-                    "symptoms": {"type": ["string", "null"]},
-                    "duration": {"type": ["string", "null"]},
-                    "laterality": {"type": ["string", "null"]},
-                    "history": {"type": ["string", "null"]},
-                },
-                "required": ["age", "sex", "symptoms", "duration", "laterality", "history"],
-            },
-            "modalities_detected": {"type": "array", "items": {"type": "string"}},
-            "missing_modalities_suggested": {"type": "array", "items": {"type": "string"}},
-            "patterns": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "name": {"type": "string"},
-                        "confidence": {"type": "number"},
-                    },
-                    "required": ["name", "confidence"],
-                },
-            },
-            "feature_checklist": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "subretinal_fluid": {"type": "string"},
-                    "intraretinal_fluid": {"type": "string"},
-                    "hemorrhage_exudation": {"type": "string"},
-                    "inner_retinal_ischemia": {"type": "string"},
-                    "ez_disruption": {"type": "string"},
-                    "rpe_atrophy_hypertransmission": {"type": "string"},
-                    "vitelliform_material": {"type": "string"},
-                    "inflammatory_signs": {"type": "string"},
-                    "m_nv_suspected": {"type": "string"},
-                    "true_mass_lesion_suspected": {"type": "string"},
-                },
-                "required": [
-                    "subretinal_fluid",
-                    "intraretinal_fluid",
-                    "hemorrhage_exudation",
-                    "inner_retinal_ischemia",
-                    "ez_disruption",
-                    "rpe_atrophy_hypertransmission",
-                    "vitelliform_material",
-                    "inflammatory_signs",
-                    "m_nv_suspected",
-                    "true_mass_lesion_suspected",
-                ],
-            },
-            "most_likely": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {"diagnosis": {"type": "string"}, "probability": {"type": "number"}},
-                "required": ["diagnosis", "probability"],
-            },
-            "differential": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "diagnosis": {"type": "string"},
-                        "probability": {"type": "number"},
-                        "for": {"type": "array", "items": {"type": "string"}},
-                        "against": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": ["diagnosis", "probability", "for", "against"],
-                },
-            },
-            "confidence_level": {"type": "string"},
-            "next_best_requests": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {"request": {"type": "string"}, "why": {"type": "string"}},
-                    "required": ["request", "why"],
-                },
-            },
-            "urgency": {"type": "string"},
-            "human_report": {"type": "string"},
-        },
-        "required": [
-            "case_summary",
-            "modalities_detected",
-            "missing_modalities_suggested",
-            "patterns",
-            "feature_checklist",
-            "most_likely",
-            "differential",
-            "confidence_level",
-            "next_best_requests",
-            "urgency",
-            "human_report",
-        ],
-    },
-}
-
-
-# -----------------------------
 # PROMPTS
 # -----------------------------
 VISION_SYSTEM = """You are a retina imaging feature extractor for DE-IDENTIFIED ophthalmic images (retina/OCT/FA/FAF/OCTA).
 These are not faces/people. Do not identify anyone.
-Task: output ONLY the requested JSON with retina morphology features.
-Be conservative when uncertain; use 'UNCERTAIN' or empty lists.
+Return STRICT JSON ONLY. No markdown. No commentary.
+If uncertain, use 'UNCERTAIN' or empty lists.
 """
 
-# This is the key: tell it explicitly what to look for (retina-specific)
 VISION_USER_TEMPLATE = """Clinical note (may be brief):
 {clinical_note}
 
-Extract retina-relevant morphology features.
-Focus on:
+Extract retina-specific morphology features (be literal):
+- modality guess (Fundus/OCT/FAF/FA/OCTA/ICGA)
 - hemorrhage vs pigment vs atrophy
-- global hypopigmentation / tessellation / choroidal visibility (e.g., albinism clues)
-- vascular tortuosity, caliber changes, ischemia clues
-- macular lesion shape/location keywords (e.g., torpedo/teardrop temporal to fovea)
-- optic disc anomalies (pit, coloboma, hypoplasia)
-Return strict JSON only.
+- global hypopigmentation / tessellation / choroidal show-through (albinism clues)
+- foveal hypoplasia suspected? (YES/NO/UNCERTAIN)
+- vascular tortuosity / caliber abnormalities / ischemia clues
+- optic disc anomalies (pit/coloboma/hypoplasia)
+- lesion shape/location keywords (e.g., torpedo/teardrop temporal to fovea)
+
+Return JSON with keys:
+modality_guess (list[str]),
+global_distribution (string),
+fundus_pigmentation (string),
+choroidal_vessel_visibility (string),
+macular_reflex (string),
+foveal_hypoplasia_suspected (string),
+optic_disc_notes (list[str]),
+vascular_pattern (list[str]),
+hemorrhage_exudates (string),
+lesion_shape_keywords (list[str]),
+lesion_location_keywords (list[str]),
+outer_retina_rpe_clues (list[str]),
+key_findings_bullets (list[str]),
+quality_notes (list[str]).
 """
 
 FINAL_SYSTEM = """You are RetinaGPT (educational only).
@@ -325,12 +188,11 @@ You will receive:
 (2) Vision-extracted features (structured JSON)
 (3) Optional REFERENCE CARDS (RAG)
 
-Task:
-- Produce an educational retina differential and structured report.
-- Use the vision features as PRIMARY evidence of what is seen.
-- Use RAG cards to refine discriminators/pitfalls (high level).
-- No patient-identifying content. No individualized treatment plan/dosing.
-Return strict JSON only in the specified schema.
+Use vision features as PRIMARY observation. Use RAG only to refine discriminators/pitfalls.
+No patient-identifying content. No individualized treatment dosing.
+Return STRICT JSON ONLY with keys:
+most_likely, differential, confidence_level, urgency, human_report, next_best_requests,
+modalities_detected, missing_modalities_suggested, patterns, feature_checklist, case_summary.
 """
 
 FINAL_USER_TEMPLATE = """CLINICAL NOTE:
@@ -341,55 +203,59 @@ VISION FEATURES (PRIMARY OBSERVATION SOURCE):
 
 {rag_block}
 
-Write:
-- detected modalities
-- likely pattern(s)
-- most likely diagnosis + weighted differential
-- confidence + next best tests (high-level)
-- include 'human_report' as a readable numbered report (1..13).
+Now produce a structured retina differential + human report.
+Return JSON ONLY (no markdown).
 """
 
 
 # -----------------------------
-# CORE CALLS (Responses API)
+# ADAPTIVE Responses call
 # -----------------------------
-def responses_json_call(
+def responses_call_json_only(
     client: OpenAI,
     model: str,
     system_text: str,
     user_text: str,
     image_data_urls: List[str],
-    json_schema: Dict[str, Any],
     max_output_tokens: int = 900,
 ) -> Tuple[Optional[Dict[str, Any]], str]:
     """
-    Returns (parsed_json_or_none, raw_output_text)
-    Uses strict json_schema wrapper (2026-safe).
+    Works on older/newer openai libs:
+    - First tries Responses API with response_format (if supported).
+    - If library rejects response_format, retries WITHOUT it.
+    Always instructs JSON-only, then parses.
     """
-    input_content: List[Dict[str, Any]] = [{"type": "input_text", "text": user_text}]
-    for url in image_data_urls:
-        input_content.append({"type": "input_image", "image_url": url, "detail": "high"})
+    input_payload = [
+        {"role": "system", "content": [{"type": "input_text", "text": system_text}]},
+        {"role": "user", "content": to_input_content(user_text, image_data_urls)},
+    ]
 
+    # 1) Try with response_format (newer)
     try:
         resp = client.responses.create(
             model=model,
-            input=[
-                {"role": "system", "content": [{"type": "input_text", "text": system_text}]},
-                {"role": "user", "content": input_content},
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": json_schema["name"],
-                    "schema": json_schema["schema"],
-                    "strict": True,
-                },
-            },
+            input=input_payload,
+            response_format={"type": "json_object"},
             max_output_tokens=max_output_tokens,
         )
         raw = getattr(resp, "output_text", "") or ""
         parsed = json_loads_safe(raw) or extract_json_from_text(raw)
         return (parsed, raw)
+    except TypeError as e:
+        # Older library: unexpected keyword response_format
+        err_txt = f"{e}"
+        # 2) Retry without response_format
+        try:
+            resp = client.responses.create(
+                model=model,
+                input=input_payload,
+                max_output_tokens=max_output_tokens,
+            )
+            raw = getattr(resp, "output_text", "") or ""
+            parsed = json_loads_safe(raw) or extract_json_from_text(raw)
+            return (parsed, f"(fallback-no-response_format)\n{raw}")
+        except Exception as e2:
+            return (None, f"ERROR (no response_format supported): {err_txt} | retry error: {e2}")
     except Exception as e:
         return (None, f"ERROR: {e}")
 
@@ -452,32 +318,30 @@ if run:
         st.warning("Please upload at least 1 image.")
         st.stop()
 
-    # Build data URLs
     image_urls: List[str] = []
     for f in uploaded:
         mime = f.type or "image/jpeg"
         image_urls.append(b64_data_url(f.getvalue(), mime))
 
+    note = (clinical_note.strip() + ("\nHint: " + optional_note if optional_note else "")).strip()
+
     # 1) Vision extract (ChatGPT vision)
     with st.spinner("Step 1/3: Vision extractor running..."):
-        user_text = VISION_USER_TEMPLATE.format(
-            clinical_note=(clinical_note.strip() + ("\nHint: " + optional_note if optional_note else "")).strip()
-        )
-        vision_parsed, vision_raw = responses_json_call(
+        v_user = VISION_USER_TEMPLATE.format(clinical_note=note if note else "(not provided)")
+        vision_parsed, vision_raw = responses_call_json_only(
             client=client,
             model=vision_model,
             system_text=VISION_SYSTEM,
-            user_text=user_text,
+            user_text=v_user,
             image_data_urls=image_urls,
-            json_schema=VISION_SCHEMA,
             max_output_tokens=700,
         )
 
     if show_debug:
-        debug_box.info(f"Vision raw (first 800 chars):\n{(vision_raw or '')[:800]}")
+        debug_box.info(f"Vision raw (first 900 chars):\n{(vision_raw or '')[:900]}")
 
     if vision_parsed is None:
-        st.error("Vision extractor failed (JSON parse). See debug output above.")
+        st.error("Vision extractor failed. See debug output above.")
         st.stop()
 
     st.success("Vision features extracted ✅")
@@ -492,31 +356,31 @@ if run:
             query += "\nretina differential diagnosis imaging"
             rag_block, rag_status = rag_retrieve(client, query, k=rag_k)
 
-    # 3) Final reasoning
+    # 3) Final reasoning (NO images; uses vision JSON)
     with st.spinner("Step 3/3: Final reasoning..."):
-        final_user = FINAL_USER_TEMPLATE.format(
+        f_user = FINAL_USER_TEMPLATE.format(
             clinical_note=clinical_note.strip() if clinical_note.strip() else "(not provided)",
             vision_json=json.dumps(vision_parsed, ensure_ascii=False, indent=2),
             rag_block=(rag_block if rag_block else "(No RAG cards retrieved)"),
         )
-        final_parsed, final_raw = responses_json_call(
+        final_parsed, final_raw = responses_call_json_only(
             client=client,
             model=final_model,
             system_text=FINAL_SYSTEM,
-            user_text=final_user,
-            image_data_urls=[],  # IMPORTANT: final step uses extracted features; no need to resend images
-            json_schema=FINAL_SCHEMA,
+            user_text=f_user,
+            image_data_urls=[],
             max_output_tokens=1400,
         )
 
     if final_parsed is None:
-        st.error("Final reasoning failed (JSON parse). Showing raw output below.")
+        st.error("Final reasoning failed. Showing raw output below.")
         st.text(final_raw)
         st.stop()
 
-    # OUTPUTS
+    # OUTPUT (best-effort fields)
+    human_report = final_parsed.get("human_report") or "(No human_report field returned. Showing full JSON below.)"
     st.subheader("Human report")
-    st.markdown(final_parsed.get("human_report", "(no report)"))
+    st.markdown(human_report)
 
     if show_debug:
         st.subheader("Vision features (debug)")
