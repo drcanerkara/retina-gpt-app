@@ -114,6 +114,9 @@ GUARDRAILS
 - Do NOT label “mass/tumor/elevated lesion” unless OCT shows clear dome-shaped thickening or solid structure.
 - If lesion is flat with outer retinal/RPE alteration without solid mass, describe accordingly.
 - If torpedo-shaped hypopigmented lesion temporal to fovea + OCT outer retinal/RPE changes, include torpedo maculopathy in top ddx.
+
+HARD RULE: If fundus shows a solitary torpedo/teardrop-shaped hypopigmented lesion temporal to the fovea,
+you MUST include "Torpedo maculopathy" in the differential (even if low confidence) and explain supporting/against features.
 """
 
 # -----------------------------
@@ -124,8 +127,6 @@ def b64_image(file_bytes: bytes, mime: str) -> str:
 
 
 def safe_get_secrets_api_key() -> Optional[str]:
-    # Streamlit Cloud: st.secrets["OPENAI_API_KEY"]
-    # Local: env var OPENAI_API_KEY
     try:
         if "OPENAI_API_KEY" in st.secrets:
             return st.secrets["OPENAI_API_KEY"]
@@ -135,13 +136,6 @@ def safe_get_secrets_api_key() -> Optional[str]:
 
 
 def parse_json_block(text: str) -> Optional[Dict[str, Any]]:
-    """
-    Expects assistant to include:
-    ```json
-    {...}
-    ```
-    Returns dict or None.
-    """
     if "```json" not in text:
         return None
     try:
@@ -172,9 +166,6 @@ def normalize_probs(items: List[Dict[str, Any]], key: str = "probability") -> Li
 
 # -----------------------------
 # RAG (FAISS) - optional
-# Expects:
-# data/index.faiss
-# data/meta.json  -> list of chunks: [{"id":..., "title":..., "text":...}, ...]
 # -----------------------------
 @st.cache_resource
 def load_rag_index(rag_dir: str) -> Tuple[bool, Optional[Any], Optional[List[Dict[str, Any]]]]:
@@ -200,10 +191,7 @@ def load_rag_index(rag_dir: str) -> Tuple[bool, Optional[Any], Optional[List[Dic
 
 def get_embedding(client: OpenAI, text: str) -> Optional[List[float]]:
     try:
-        emb = client.embeddings.create(
-            model="text-embedding-3-small",
-            input=text
-        )
+        emb = client.embeddings.create(model="text-embedding-3-small", input=text)
         return emb.data[0].embedding
     except Exception:
         return None
@@ -244,7 +232,6 @@ def rag_retrieve(client: OpenAI, query: str, k: int = MAX_RAG_HITS) -> Tuple[str
 
         context_lines = ["REFERENCE CARDS (RAG):"]
         for n, (title, text, dist) in enumerate(hits, start=1):
-            # dist kept for debugging; not shown in final to keep context clean
             context_lines.append(f"\n--- CARD {n}: {title} ---\n{text}\n")
 
         return ("\n".join(context_lines), status)
@@ -255,19 +242,65 @@ def rag_retrieve(client: OpenAI, query: str, k: int = MAX_RAG_HITS) -> Tuple[str
 
 
 # -----------------------------
+# VISUAL PATTERN EXTRACTION (to improve RAG)
+# -----------------------------
+def extract_patterns_for_rag(
+    client: OpenAI,
+    model_name: str,
+    clinical_text: str,
+    image_content: List[Dict[str, Any]],
+) -> str:
+    """
+    Quick visual pattern extraction to improve RAG retrieval.
+    Returns keyword-rich morphology ONLY (no diagnosis).
+    """
+    system = (
+        "You are a retina imaging pattern extractor. "
+        "Task: describe visible morphology ONLY, no diagnosis. "
+        "Return 8-15 bullet keywords focusing on: lesion shape, location (temporal to fovea, peripapillary), "
+        "pigmentation (hypopigmented/hyperpigmented), borders, associated atrophy, hemorrhage, exudates, "
+        "traction, fluid, and whether lesion appears RPE-level vs choroidal vs retinal."
+    )
+
+    user_text = (
+        "CLINICAL:\n"
+        + (clinical_text.strip() if clinical_text.strip() else "(none)")
+        + "\n\nOUTPUT FORMAT:\n- keyword\n- keyword\n(no extra text)"
+    )
+
+    msgs: List[Dict[str, Any]] = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": [{"type": "text", "text": user_text}] + (image_content or [])},
+    ]
+
+    try:
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=msgs,
+            temperature=0.0,
+            max_tokens=250,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception:
+        return ""
+
+
+# -----------------------------
 # CASE MEMORY
 # -----------------------------
 def init_session():
     if "case_id" not in st.session_state:
         st.session_state.case_id = 1
     if "case_notes" not in st.session_state:
-        st.session_state.case_notes = ""  # running summary
+        st.session_state.case_notes = ""
     if "case_history" not in st.session_state:
-        st.session_state.case_history = []  # chat turns (role/content)
+        st.session_state.case_history = []
     if "last_json" not in st.session_state:
-        st.session_state.last_json = None  # last structured output
+        st.session_state.last_json = None
     if "last_missing_requests" not in st.session_state:
         st.session_state.last_missing_requests = []
+    if "pattern_keywords" not in st.session_state:
+        st.session_state.pattern_keywords = ""
 
 
 def update_case_memory(new_json: Dict[str, Any]):
@@ -303,13 +336,10 @@ client = OpenAI(api_key=api_key)
 
 with st.sidebar:
     st.header("Settings")
-
     model_options = list(dict.fromkeys([DEFAULT_MODEL, "gpt-4o"]))
     model = st.selectbox("Model", options=model_options, index=0)
-
     use_rag = st.checkbox("Enable RAG (FAISS)", value=True)
     rag_k = st.slider("RAG hits (k)", min_value=2, max_value=10, value=MAX_RAG_HITS, step=1)
-
     st.divider()
     if st.button("🧹 New case (reset memory)"):
         st.session_state.case_id += 1
@@ -317,6 +347,7 @@ with st.sidebar:
         st.session_state.case_history = []
         st.session_state.last_json = None
         st.session_state.last_missing_requests = []
+        st.session_state.pattern_keywords = ""
         st.rerun()
 
 col1, col2 = st.columns([1, 1], gap="large")
@@ -348,23 +379,55 @@ with col2:
     rag_context = ""
     rag_status: Dict[str, Any] = {"enabled": False, "hits": 0, "index_dim": None, "error": None}
 
+    # -----------------------------
+    # Build retrieval query (NOW includes image-derived keywords)
+    # -----------------------------
     retrieval_query = clinical_text.strip()
     if st.session_state.case_notes:
         retrieval_query += "\n\nPrior summary: " + st.session_state.case_notes
+
+    # Extract image pattern keywords to improve retrieval
+    st.session_state.pattern_keywords = ""
+    if files:
+        # build images payload for extractor
+        def _b64_image(file_bytes: bytes, mime: str) -> str:
+            return f"data:{mime};base64,{base64.b64encode(file_bytes).decode('utf-8')}"
+
+        tmp_img_payload: List[Dict[str, Any]] = []
+        for f in files:
+            mime = f.type or "image/jpeg"
+            b64 = _b64_image(f.getvalue(), mime)
+            tmp_img_payload.append({"type": "image_url", "image_url": {"url": b64}})
+
+        extractor_model = "gpt-4o" if model == "gpt-4o-mini" else model
+        st.session_state.pattern_keywords = extract_patterns_for_rag(
+            client=client,
+            model_name=extractor_model,
+            clinical_text=clinical_text,
+            image_content=tmp_img_payload,
+        )
+
+    if st.session_state.pattern_keywords:
+        retrieval_query += "\n\nIMAGE PATTERN KEYWORDS:\n" + st.session_state.pattern_keywords
+
+    # Add stable retina retrieval anchors
+    retrieval_query += "\n\nretina fundus lesion macula differential diagnosis imaging"
 
     if use_rag:
         rag_context, rag_status = rag_retrieve(client, retrieval_query, k=rag_k)
 
     if rag_status.get("enabled"):
         st.success(
-            f"RAG enabled: FAISS index + meta.json loaded. "
-            f"Hits: {rag_status.get('hits')} | dim: {rag_status.get('index_dim')}"
+            f"RAG enabled: FAISS index + meta.json loaded. Hits: {rag_status.get('hits')} | dim: {rag_status.get('index_dim')}"
         )
     else:
         st.warning("RAG disabled or not available (check data/index.faiss + data/meta.json and faiss-cpu).")
 
     if rag_status.get("error"):
         st.error(f"RAG error: {rag_status['error']}")
+
+    with st.expander("Show extracted image keywords (debug)", expanded=False):
+        st.text(st.session_state.pattern_keywords if st.session_state.pattern_keywords else "(No extracted keywords)")
 
     with st.expander("Show retrieved cards (debug)", expanded=False):
         st.text(rag_context if rag_context else "(No RAG context)")
@@ -407,7 +470,6 @@ def call_model(
     if case_memory:
         messages.append({"role": "system", "content": f"CASE MEMORY (same patient, continue analysis): {case_memory}"})
 
-    # Keep last few turns only to avoid token bloat
     for m in chat_history[-6:]:
         messages.append(m)
 
@@ -431,14 +493,10 @@ def call_model(
         )
         return resp.choices[0].message.content or ""
     except Exception as e:
-        # Return a readable error string to render in UI
         return (
             "```json\n"
             + json.dumps(
-                {
-                    "error": "OpenAI API call failed",
-                    "details": str(e),
-                },
+                {"error": "OpenAI API call failed", "details": str(e)},
                 ensure_ascii=False,
                 indent=2,
             )
@@ -464,15 +522,13 @@ if run:
         chat_history=st.session_state.case_history,
     )
 
-    # Save turn to history (keep text-only history to reduce future format issues)
     st.session_state.case_history.append(
         {
             "role": "user",
             "content": [
                 {
                     "type": "text",
-                    "text": f"[Clinical]\n{clinical_text[:800]}{'...' if len(clinical_text) > 800 else ''}\n"
-                            f"[Images] {len(img_payload)}"
+                    "text": f"[Clinical]\n{clinical_text[:800]}{'...' if len(clinical_text) > 800 else ''}\n[Images] {len(img_payload)}"
                 }
             ],
         }
@@ -486,10 +542,8 @@ if run:
     if parsed:
         if isinstance(parsed.get("differential"), list):
             parsed["differential"] = normalize_probs(parsed["differential"], "probability")
-
         update_case_memory(parsed)
 
-    # Display
     st.subheader("Assistant output")
     st.markdown(assistant_text)
 
