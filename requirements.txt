@@ -2,3 +2,4 @@ streamlit
 openai
 faiss-cpu
 numpy
+opencv-python-headless
