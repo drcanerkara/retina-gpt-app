@@ -35,16 +35,12 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 # =========================
-# Fixed models (no sidebar)
+# Models (no sidebar)
 # =========================
 OPENAI_VISION_MODEL = "gpt-4o"
 OPENAI_ARBITER_MODEL = "gpt-4o-mini"
 
-# Put the Gemini model name that WORKS in your account:
-# examples you can try (depends on your key availability):
-# - "gemini-3-flash-preview"
-# - "gemini-1.5-pro-latest"
-# - "gemini-1.5-flash-latest"
+# IMPORTANT: Put the Gemini model name that WORKS in your account
 GEMINI_VISION_MODEL = "gemini-3-flash-preview"
 
 
@@ -85,7 +81,6 @@ with top_left:
         st.rerun()
 
 st.subheader(f"Case #{st.session_state.case_counter}")
-
 st.info("Tip: Update clinical info and/or add more images, then click **Re-run analysis**.")
 
 
@@ -138,6 +133,54 @@ def safe_json_extract(text: str):
     return None
 
 
+def to_jsonable(obj):
+    """
+    Convert anything (pydantic/proto/SDK objects) into JSON-serializable form.
+    """
+    if obj is None:
+        return None
+
+    # basic types
+    if isinstance(obj, (str, int, float, bool)):
+        return obj
+
+    # bytes -> short tag (we don't want huge payloads)
+    if isinstance(obj, (bytes, bytearray)):
+        return f"<bytes:{len(obj)}>"
+
+    # dict
+    if isinstance(obj, dict):
+        return {str(k): to_jsonable(v) for k, v in obj.items()}
+
+    # list/tuple/set
+    if isinstance(obj, (list, tuple, set)):
+        return [to_jsonable(x) for x in obj]
+
+    # pydantic v2
+    if hasattr(obj, "model_dump"):
+        try:
+            return to_jsonable(obj.model_dump())
+        except Exception:
+            pass
+
+    # pydantic v1
+    if hasattr(obj, "dict"):
+        try:
+            return to_jsonable(obj.dict())
+        except Exception:
+            pass
+
+    # generic objects
+    if hasattr(obj, "__dict__"):
+        try:
+            return to_jsonable(vars(obj))
+        except Exception:
+            pass
+
+    # fallback
+    return str(obj)
+
+
 def normalize_dx(dx: str) -> str:
     if not dx:
         return ""
@@ -145,12 +188,12 @@ def normalize_dx(dx: str) -> str:
 
 
 def overlap_top2(a: dict, b: dict) -> bool:
-    a1 = normalize_dx(a.get("top_diagnosis", ""))
-    b1 = normalize_dx(b.get("top_diagnosis", ""))
+    a1 = normalize_dx((a or {}).get("top_diagnosis", ""))
+    b1 = normalize_dx((b or {}).get("top_diagnosis", ""))
     if a1 and b1 and a1 == b1:
         return True
-    a2 = [normalize_dx(x) for x in (a.get("top_differentials") or [])[:2]]
-    b2 = [normalize_dx(x) for x in (b.get("top_differentials") or [])[:2]]
+    a2 = [normalize_dx(x) for x in ((a or {}).get("top_differentials") or [])[:2]]
+    b2 = [normalize_dx(x) for x in ((b or {}).get("top_differentials") or [])[:2]]
     return (a1 in b2) or (b1 in a2) or (set(a2) & set(b2))
 
 
@@ -164,10 +207,6 @@ VISION_JSON_SCHEMA = {
 
 
 def images_from_uploader(uploader_files):
-    """
-    Convert Streamlit uploaded files into stable in-memory list (bytes),
-    so Re-run works even if user doesn't re-upload.
-    """
     imgs = []
     for f in uploader_files or []:
         imgs.append({
@@ -179,7 +218,7 @@ def images_from_uploader(uploader_files):
 
 
 # =========================
-# Model calls (NO feature extraction, NO RAG)
+# Model calls
 # =========================
 def call_openai_vision(clinical_text: str, images):
     content = [{
@@ -218,7 +257,6 @@ def call_gemini_vision(clinical_text: str, images):
         )
     }]
 
-    # Important: use inline_data base64 because it's the most compatible path
     for img in images:
         parts.append({
             "inline_data": {
@@ -247,6 +285,9 @@ def build_final_report(clinical_text: str, gemini_js: dict, openai_js: dict, agr
         "openai_opinion": openai_js,
         "agreement": agreement
     }
+
+    # ✅ FIX: force JSON-serializable
+    payload = to_jsonable(payload)
 
     system = """
 You are RetinaGPT Arbiter.
@@ -278,9 +319,6 @@ Structure:
     return resp.choices[0].message.content or ""
 
 
-# =========================
-# Run logic
-# =========================
 def run_pipeline():
     images = st.session_state.saved_images
     clin = st.session_state.saved_clinical
@@ -291,12 +329,10 @@ def run_pipeline():
 
     if not gem_js:
         st.error("Gemini did not return valid JSON (parsing failed).")
-        # show minimal debug to help
         st.code(gem_raw[:3000])
         st.stop()
 
     if not oa_js:
-        # continue with Gemini only (OpenAI vision may occasionally return non-JSON)
         oa_js = {
             "top_diagnosis": "UNCERTAIN",
             "top_differentials": [],
@@ -308,16 +344,14 @@ def run_pipeline():
     agree = overlap_top2(gem_js, oa_js)
     report = build_final_report(clin, gem_js, oa_js, agree)
 
-    # suggested list
     needed = list(dict.fromkeys(
-        (gemini_js.get("requested_additional_info") or []) +
+        (gem_js.get("requested_additional_info") or []) +
         (oa_js.get("requested_additional_info") or [])
     ))
 
     st.session_state.last_report = report
     st.session_state.last_needed = needed
 
-    # Show ONE output
     st.subheader("Final Report")
     st.write(report)
 
@@ -328,15 +362,15 @@ def run_pipeline():
     else:
         st.write("None.")
 
-    # fully hidden debug (remove if you want)
+    # Optional debug (remove if you want fully hidden)
     with st.expander("🔧 Debug (admin only)"):
         st.markdown("**Gemini raw**")
-        st.code(gem_raw[:4000])
+        st.code((gem_raw or "")[:4000])
         st.markdown("**Gemini JSON**")
         st.json(gem_js)
 
         st.markdown("**OpenAI raw**")
-        st.code(oa_raw[:4000])
+        st.code((oa_raw or "")[:4000])
         st.markdown("**OpenAI JSON**")
         st.json(oa_js)
 
@@ -345,13 +379,8 @@ def run_pipeline():
 # Button actions
 # =========================
 if analyze_btn:
-    # Save current inputs into session state
-    if uploads:
-        st.session_state.saved_images = images_from_uploader(uploads)
-    else:
-        st.session_state.saved_images = []
-
     st.session_state.saved_clinical = clinical or ""
+    st.session_state.saved_images = images_from_uploader(uploads) if uploads else []
 
     if not st.session_state.saved_images:
         st.error("Please upload at least 1 image.")
@@ -360,10 +389,9 @@ if analyze_btn:
     run_pipeline()
 
 elif rerun_btn:
-    # Re-run uses stored images; allow user to update clinical text without reupload
     st.session_state.saved_clinical = clinical or ""
 
-    # If user uploaded new images, replace stored images (common expectation)
+    # If user uploaded new images, replace stored images
     if uploads:
         st.session_state.saved_images = images_from_uploader(uploads)
 
@@ -373,9 +401,6 @@ elif rerun_btn:
 
     run_pipeline()
 
-# =========================
-# Persist last report on screen (optional)
-# =========================
 if st.session_state.last_report and not (analyze_btn or rerun_btn):
     st.subheader("Last Final Report")
     st.write(st.session_state.last_report)
