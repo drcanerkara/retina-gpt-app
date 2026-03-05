@@ -295,6 +295,7 @@ def rag_retrieve(client: OpenAI, query: str, k: int = MAX_RAG_HITS) -> Tuple[str
 # RETINA FEATURE EXTRACTOR (structured) - runs only when Analyze is clicked
 # -----------------------------
 def extract_retina_features_for_rag(
+    def extract_retina_features_for_rag(
     client: OpenAI,
     model_name: str,
     clinical_text: str,
@@ -306,7 +307,7 @@ def extract_retina_features_for_rag(
     """
     system = """
 You are a RETINAL IMAGING FEATURE EXTRACTOR for DE-IDENTIFIED ophthalmic images.
-These are NOT faces/people. Do NOT identify any person.
+These are NON-HUMAN medical images (retina/fundus/OCT). Do NOT identify any person.
 DO NOT diagnose. DO NOT name diseases.
 
 Task: Extract VISUAL FEATURES as structured JSON.
@@ -332,10 +333,8 @@ Rules:
 """
 
     user_text = (
-        "DE-IDENTIFIED RETINAL IMAGES.\n"
-        "Extract features ONLY.\n\n"
-        "CLINICAL:\n"
-        + (clinical_text.strip() if clinical_text.strip() else "(none)")
+        "DE-IDENTIFIED RETINAL IMAGES (NOT faces/people). Extract features ONLY.\n\n"
+        "CLINICAL:\n" + (clinical_text.strip() if clinical_text.strip() else "(none)")
     )
 
     msgs: List[Dict[str, Any]] = [
@@ -344,15 +343,19 @@ Rules:
     ]
 
     try:
+        # IMPORTANT: force JSON output
         resp = client.chat.completions.create(
             model=model_name,
             messages=msgs,
             temperature=0.0,
-            max_tokens=450,
+            max_tokens=500,
+            response_format={"type": "json_object"},
         )
         txt = (resp.choices[0].message.content or "").strip()
         return json.loads(txt)
-    except Exception:
+
+    except Exception as e:
+        # Return details so you can see WHY it failed
         return {
             "modality_guess": [],
             "global_distribution": "UNCERTAIN",
@@ -364,7 +367,7 @@ Rules:
             "lesion_shape_keywords": [],
             "lesion_location_keywords": [],
             "outer_retina_rpe_clues": ["UNCERTAIN"],
-            "quality_notes": ["extract_failed"],
+            "quality_notes": [f"extract_failed: {type(e).__name__}: {str(e)[:180]}"],
         }
 
 
