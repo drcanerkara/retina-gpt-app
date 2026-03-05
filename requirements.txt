@@ -1,6 +1,4 @@
+openai>=1.0.0
 streamlit
-openai
-pillow
 faiss-cpu
 numpy
-opencv-python-headless
