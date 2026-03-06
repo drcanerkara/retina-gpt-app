@@ -11,26 +11,23 @@ from google import genai
 # =========================
 # Page
 # =========================
-st.set_page_config(page_title="RetinaGPT — Dual Opinion", page_icon="👁️", layout="centered")
+st.set_page_config(page_title="RetinaGPT", page_icon="👁️", layout="centered")
 
 st.markdown(
     """
     <style>
       .block-container {padding-top: 2rem; padding-bottom: 2rem; max-width: 880px;}
       .big-title {font-size: 2.0rem; font-weight: 800; margin-bottom: 0.25rem;}
-      .subtle {color: #6b7280; margin-top: 0;}
       .card {border: 1px solid rgba(0,0,0,0.08); border-radius: 14px; padding: 16px; background: white;}
       .divider {height: 1px; background: rgba(0,0,0,0.08); margin: 14px 0;}
       .pill {display:inline-block; padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(0,0,0,0.10); font-size: 0.85rem;}
       .muted {color:#6b7280;}
-      .btnrow {display:flex; gap:10px; align-items:center;}
     </style>
     """,
     unsafe_allow_html=True
 )
 
 st.markdown('<div class="big-title">👁️ RetinaGPT</div>', unsafe_allow_html=True)
-st.markdown('<p class="subtle">Gemini + OpenAI opinion → one final educational report (not medical advice).</p>', unsafe_allow_html=True)
 
 
 # =========================
@@ -40,19 +37,22 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY",
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
 
 if not OPENAI_API_KEY:
-    st.error("Missing OPENAI_API_KEY (env or Streamlit secrets).")
+    st.error("Missing OPENAI_API_KEY.")
     st.stop()
+
 if not GEMINI_API_KEY:
-    st.error("Missing GEMINI_API_KEY (env or Streamlit secrets).")
+    st.error("Missing GEMINI_API_KEY.")
     st.stop()
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Models (hidden)
+
+# =========================
+# Models
+# =========================
 OPENAI_VISION_MODEL = "gpt-4o"
 OPENAI_ARBITER_MODEL = "gpt-4o-mini"
-# Put the Gemini model that works for your account
 GEMINI_VISION_MODEL = "gemini-3-flash-preview"
 
 
@@ -65,7 +65,7 @@ def ss_init():
     if "clinical" not in st.session_state:
         st.session_state.clinical = ""
     if "images" not in st.session_state:
-        st.session_state.images = []  # [{name,mime,data}]
+        st.session_state.images = []
     if "final_report" not in st.session_state:
         st.session_state.final_report = ""
     if "agreement" not in st.session_state:
@@ -74,6 +74,8 @@ def ss_init():
         st.session_state.chat_history = []
     if "analysis_done" not in st.session_state:
         st.session_state.analysis_done = False
+    if "uploader_key" not in st.session_state:
+        st.session_state.uploader_key = 1
 
 ss_init()
 
@@ -86,6 +88,7 @@ def reset_case():
     st.session_state.agreement = None
     st.session_state.chat_history = []
     st.session_state.analysis_done = False
+    st.session_state.uploader_key += 1
 
 
 # =========================
@@ -94,6 +97,7 @@ def reset_case():
 def b64_data_url(mime: str, data: bytes) -> str:
     b64 = base64.b64encode(data).decode("utf-8")
     return f"data:{mime};base64,{b64}"
+
 
 def safe_json_extract(text: str):
     if not text:
@@ -109,6 +113,7 @@ def safe_json_extract(text: str):
             except Exception:
                 return None
     return None
+
 
 def to_jsonable(obj):
     if obj is None:
@@ -138,10 +143,12 @@ def to_jsonable(obj):
             pass
     return str(obj)
 
+
 def normalize_dx(dx: str) -> str:
     if not dx:
         return ""
     return re.sub(r"[^a-z0-9]+", " ", dx.lower()).strip()
+
 
 def overlap_top2(a: dict, b: dict) -> bool:
     a1 = normalize_dx((a or {}).get("top_diagnosis", ""))
@@ -152,6 +159,7 @@ def overlap_top2(a: dict, b: dict) -> bool:
     b2 = [normalize_dx(x) for x in ((b or {}).get("top_differentials") or [])[:2]]
     return (a1 in b2) or (b1 in a2) or (set(a2) & set(b2))
 
+
 VISION_JSON_SCHEMA = {
     "top_diagnosis": "string",
     "top_differentials": ["string", "string", "string"],
@@ -160,10 +168,15 @@ VISION_JSON_SCHEMA = {
     "requested_additional_info": ["string", "string", "string"]
 }
 
+
 def uploads_to_images(files):
     out = []
     for f in files or []:
-        out.append({"name": f.name, "mime": f.type or "image/jpeg", "data": f.getvalue()})
+        out.append({
+            "name": f.name,
+            "mime": f.type or "image/jpeg",
+            "data": f.getvalue()
+        })
     return out
 
 
@@ -180,10 +193,11 @@ def call_openai_vision(clinical_text: str, images):
             f"Clinical info:\n{clinical_text if clinical_text.strip() else '(none provided)'}"
         )
     }]
+
     for img in images:
         content.append({
             "type": "image_url",
-            "image_url": {"url": b64_data_url(img["mime"], img["data"])}
+            "image_url": {"url": b64_data_url(img['mime'], img['data'])}
         })
 
     resp = openai_client.chat.completions.create(
@@ -194,6 +208,7 @@ def call_openai_vision(clinical_text: str, images):
     raw = resp.choices[0].message.content or ""
     return raw, safe_json_extract(raw)
 
+
 def call_gemini_vision(clinical_text: str, images):
     parts = [{
         "text": (
@@ -203,6 +218,7 @@ def call_gemini_vision(clinical_text: str, images):
             f"Clinical info:\n{clinical_text if clinical_text.strip() else '(none provided)'}"
         )
     }]
+
     for img in images:
         parts.append({
             "inline_data": {
@@ -221,7 +237,7 @@ def call_gemini_vision(clinical_text: str, images):
 
 
 # =========================
-# Final report (prettier format)
+# Final report
 # =========================
 def build_final_report(clinical_text: str, gemini_js: dict, openai_js: dict, agreement: bool):
     payload = to_jsonable({
@@ -236,16 +252,17 @@ You are RetinaGPT Arbiter. Produce ONE final educational report.
 
 Formatting requirements:
 - Use numbered sections 1–5 exactly.
-- Section 1 line must start with: "1) Most likely diagnosis:" and the diagnosis must be in **bold**.
-- Provide a short confidence tag like: (High/Moderate/Low).
+- Section 1 must start with: "1) Most likely diagnosis:" and the diagnosis must be in **bold**.
+- Add a short confidence tag like: (High/Moderate/Low).
 - Use bullet points where appropriate.
-- Avoid verbose disclaimers (one short line only).
+- Keep the style clean and concise.
 
 Content requirements:
 - Morphology-first reasoning.
 - If agreement=true: commit to one most likely diagnosis and keep differential brief.
 - If disagreement: show ranked differential and "Needed to confirm" (max 4 items).
 - Use retina subspecialty terminology.
+- End with one short educational caution line.
 """
 
     resp = openai_client.chat.completions.create(
@@ -260,15 +277,48 @@ Content requirements:
 
 
 # =========================
+# Chat continuation
+# =========================
+def chat_reply(user_text: str):
+    context_pack = to_jsonable({
+        "case": st.session_state.case_id,
+        "clinical": st.session_state.clinical,
+        "final_report": st.session_state.final_report
+    })
+
+    system = """
+You are RetinaGPT (educational). Continue discussion for the SAME case.
+- Use the existing final report as the baseline.
+- If user asks what to upload next: suggest the single most useful modality and what to look for.
+- Keep outputs concise and structured.
+"""
+
+    messages = [{"role": "system", "content": system}]
+    messages.append({"role": "user", "content": "CASE CONTEXT:\n" + json.dumps(context_pack, ensure_ascii=False, indent=2)})
+
+    for m in st.session_state.chat_history[-20:]:
+        messages.append({"role": m["role"], "content": m["content"]})
+
+    messages.append({"role": "user", "content": user_text})
+
+    resp = openai_client.chat.completions.create(
+        model=OPENAI_ARBITER_MODEL,
+        messages=messages,
+        temperature=0
+    )
+    return resp.choices[0].message.content or ""
+
+
+# =========================
 # Analysis pipeline
 # =========================
 def run_analysis():
     images = st.session_state.images
     clin = st.session_state.clinical
 
-    with st.spinner("Analyzing with Gemini + OpenAI..."):
-        gem_raw, gem_js = call_gemini_vision(clin, images)
-        oa_raw, oa_js = call_openai_vision(clin, images)
+    with st.spinner("Analyzing..."):
+        _, gem_js = call_gemini_vision(clin, images)
+        _, oa_js = call_openai_vision(clin, images)
 
     if not gem_js:
         st.error("Gemini did not return valid JSON. Try again.")
@@ -307,12 +357,12 @@ st.session_state.clinical = clinical or ""
 uploads = st.file_uploader(
     "Upload retinal images",
     type=["jpg", "jpeg", "png", "webp"],
-    accept_multiple_files=True
+    accept_multiple_files=True,
+    key=f"uploader_{st.session_state.uploader_key}"
 )
 
 if uploads:
     cols = st.columns(2)
-    # show up to 2 previews to keep UI clean
     show = uploads[:2]
     for i, f in enumerate(show):
         with cols[i % 2]:
@@ -322,13 +372,9 @@ if uploads:
 
 st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-colA, colB = st.columns([1, 1])
-with colA:
-    analyze = st.button("🔎 Analyze", type="primary", use_container_width=True)
-with colB:
-    rerun = st.button("🔄 Re-run", use_container_width=True)
+analyze = st.button("🔎 Analyze", type="primary", use_container_width=True)
 
-if analyze or rerun:
+if analyze:
     if not uploads:
         st.error("Please upload at least one image.")
     else:
@@ -345,64 +391,35 @@ if st.session_state.final_report:
     st.markdown('<div class="card">', unsafe_allow_html=True)
 
     tag = "✅ Agreement" if st.session_state.agreement else "⚠️ Disagreement"
-    st.markdown(f'<span class="pill">{tag}</span> <span class="pill muted">Case #{st.session_state.case_id}</span>', unsafe_allow_html=True)
+    st.markdown(
+        f'<span class="pill">{tag}</span> <span class="pill muted">Case #{st.session_state.case_id}</span>',
+        unsafe_allow_html=True
+    )
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
     st.markdown(st.session_state.final_report)
 
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-    # Ask new patient only AFTER analysis
-    if st.session_state.analysis_done:
-        if st.button("🆕 Ask new patient", use_container_width=True):
-            reset_case()
-            st.rerun()
+    if st.button("🆕 Ask new patient", use_container_width=True):
+        reset_case()
+        st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 
 # =========================
-# Chat (continuation)
+# Chat
 # =========================
 if st.session_state.final_report:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("💬 Follow-up chat")
 
-    # render history
     for m in st.session_state.chat_history:
         with st.chat_message(m["role"]):
             st.write(m["content"])
 
-    user_msg = st.chat_input("Ask a follow-up (e.g., 'What OCT findings would confirm this?')")
-
-    def chat_reply(user_text: str):
-        context_pack = to_jsonable({
-            "case": st.session_state.case_id,
-            "clinical": st.session_state.clinical,
-            "final_report": st.session_state.final_report
-        })
-
-        system = """
-You are RetinaGPT (educational). Continue discussion for the SAME case.
-- Use the existing final report as the baseline.
-- If user asks what to upload next: suggest the single most useful modality and what to look for.
-- Be concise and structured.
-"""
-
-        messages = [{"role": "system", "content": system}]
-        messages.append({"role": "user", "content": "CASE CONTEXT:\n" + json.dumps(context_pack, ensure_ascii=False, indent=2)})
-
-        for m in st.session_state.chat_history[-20:]:
-            messages.append({"role": m["role"], "content": m["content"]})
-
-        messages.append({"role": "user", "content": user_text})
-
-        resp = openai_client.chat.completions.create(
-            model=OPENAI_ARBITER_MODEL,
-            messages=messages,
-            temperature=0
-        )
-        return resp.choices[0].message.content or ""
+    user_msg = st.chat_input("Ask a follow-up question…")
 
     if user_msg:
         st.session_state.chat_history.append({"role": "user", "content": user_msg})
