@@ -11,24 +11,47 @@ from google import genai
 # =========================
 # Page
 # =========================
-st.set_page_config(page_title="RetinaGPT", page_icon="👁️", layout="centered")
+st.set_page_config(page_title="RetinaGPT", page_icon="👁️", layout="wide")
 
 st.markdown(
     """
     <style>
-      .block-container {padding-top: 2rem; padding-bottom: 2rem; max-width: 880px;}
-      .big-title {font-size: 2.0rem; font-weight: 800; margin-bottom: 0.25rem;}
-      .card {border: 1px solid rgba(0,0,0,0.08); border-radius: 14px; padding: 16px; background: white;}
-      .divider {height: 1px; background: rgba(0,0,0,0.08); margin: 14px 0;}
-      .pill {display:inline-block; padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(0,0,0,0.10); font-size: 0.85rem;}
+      .block-container {padding-top: 1.2rem; padding-bottom: 1.5rem; max-width: 1100px;}
+      .big-title {font-size: 2rem; font-weight: 800; margin-bottom: 0.3rem;}
+      .card {
+          border: 1px solid rgba(0,0,0,0.08);
+          border-radius: 14px;
+          padding: 16px;
+          background: white;
+      }
+      .divider {
+          height: 1px;
+          background: rgba(0,0,0,0.08);
+          margin: 12px 0;
+      }
+      .pill {
+          display:inline-block;
+          padding: 4px 10px;
+          border-radius: 999px;
+          border: 1px solid rgba(0,0,0,0.10);
+          font-size: 0.85rem;
+      }
       .muted {color:#6b7280;}
+      .history-item {
+          padding: 10px 12px;
+          border: 1px solid rgba(0,0,0,0.08);
+          border-radius: 12px;
+          margin-bottom: 8px;
+          background: #fff;
+      }
+      @media (max-width: 768px) {
+          .block-container {padding-top: 1rem; max-width: 100%;}
+          .big-title {font-size: 1.7rem;}
+      }
     </style>
     """,
     unsafe_allow_html=True
 )
-
-st.markdown('<div class="big-title">👁️ RetinaGPT</div>', unsafe_allow_html=True)
-
 
 # =========================
 # Keys
@@ -47,13 +70,9 @@ if not GEMINI_API_KEY:
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
-
-# =========================
-# Models
-# =========================
 OPENAI_VISION_MODEL = "gpt-4o"
 OPENAI_ARBITER_MODEL = "gpt-4o-mini"
-GEMINI_VISION_MODEL = "gemini-3-flash-preview"
+GEMINI_VISION_MODEL = "gemini-3-flash-preview"  # replace if needed
 
 
 # =========================
@@ -76,11 +95,30 @@ def ss_init():
         st.session_state.analysis_done = False
     if "uploader_key" not in st.session_state:
         st.session_state.uploader_key = 1
+    if "case_history" not in st.session_state:
+        st.session_state.case_history = []
+    if "current_top_dx" not in st.session_state:
+        st.session_state.current_top_dx = ""
 
 ss_init()
 
 
+def save_current_case_to_history():
+    if st.session_state.final_report:
+        item = {
+            "case_id": st.session_state.case_id,
+            "diagnosis": st.session_state.current_top_dx or "Unknown diagnosis",
+            "clinical": st.session_state.clinical,
+            "report": st.session_state.final_report
+        }
+        # avoid duplicate save of same case/report
+        if not st.session_state.case_history or st.session_state.case_history[0]["report"] != item["report"]:
+            st.session_state.case_history.insert(0, item)
+            st.session_state.case_history = st.session_state.case_history[:5]
+
+
 def reset_case():
+    save_current_case_to_history()
     st.session_state.case_id += 1
     st.session_state.clinical = ""
     st.session_state.images = []
@@ -89,6 +127,16 @@ def reset_case():
     st.session_state.chat_history = []
     st.session_state.analysis_done = False
     st.session_state.uploader_key += 1
+    st.session_state.current_top_dx = ""
+
+
+def load_case_from_history(index: int):
+    item = st.session_state.case_history[index]
+    st.session_state.final_report = item["report"]
+    st.session_state.clinical = item["clinical"]
+    st.session_state.current_top_dx = item["diagnosis"]
+    st.session_state.analysis_done = True
+    st.session_state.chat_history = []
 
 
 # =========================
@@ -197,7 +245,7 @@ def call_openai_vision(clinical_text: str, images):
     for img in images:
         content.append({
             "type": "image_url",
-            "image_url": {"url": b64_data_url(img['mime'], img['data'])}
+            "image_url": {"url": b64_data_url(img["mime"], img["data"])}
         })
 
     resp = openai_client.chat.completions.create(
@@ -250,19 +298,32 @@ def build_final_report(clinical_text: str, gemini_js: dict, openai_js: dict, agr
     system = """
 You are RetinaGPT Arbiter. Produce ONE final educational report.
 
-Formatting requirements:
-- Use numbered sections 1–5 exactly.
-- Section 1 must start with: "1) Most likely diagnosis:" and the diagnosis must be in **bold**.
-- Add a short confidence tag like: (High/Moderate/Low).
-- Use bullet points where appropriate.
-- Keep the style clean and concise.
+Use exactly this format:
 
-Content requirements:
-- Morphology-first reasoning.
-- If agreement=true: commit to one most likely diagnosis and keep differential brief.
-- If disagreement: show ranked differential and "Needed to confirm" (max 4 items).
-- Use retina subspecialty terminology.
-- End with one short educational caution line.
+1) Most likely diagnosis:
+- Write the diagnosis in **bold**
+- Add confidence in parentheses: High / Moderate / Low
+
+2) Key imaging findings:
+- 3 to 6 concise bullet points
+- Morphology-first
+- Use retina terminology
+
+3) Differential diagnosis:
+- Up to 3 diagnoses
+- Short explanation only
+
+4) Management considerations:
+- Keep this brief and practical
+- Mention interventions only if clearly relevant and supported by the case pattern
+- Avoid generic internal medicine advice unless directly relevant
+
+5) Suggested additional imaging:
+- Only include if genuinely useful
+- If not needed, write: None
+
+End with one short line:
+Educational interpretation only; correlate clinically.
 """
 
     resp = openai_client.chat.completions.create(
@@ -277,7 +338,7 @@ Content requirements:
 
 
 # =========================
-# Chat continuation
+# Chat
 # =========================
 def chat_reply(user_text: str):
     context_pack = to_jsonable({
@@ -289,8 +350,8 @@ def chat_reply(user_text: str):
     system = """
 You are RetinaGPT (educational). Continue discussion for the SAME case.
 - Use the existing final report as the baseline.
-- If user asks what to upload next: suggest the single most useful modality and what to look for.
-- Keep outputs concise and structured.
+- Keep outputs concise and retina-focused.
+- If user asks what to upload next, recommend the single most useful modality and what to look for.
 """
 
     messages = [{"role": "system", "content": system}]
@@ -333,6 +394,7 @@ def run_analysis():
             "requested_additional_info": []
         }
 
+    st.session_state.current_top_dx = gem_js.get("top_diagnosis", "") or oa_js.get("top_diagnosis", "")
     agree = overlap_top2(gem_js, oa_js)
     report = build_final_report(clin, gem_js, oa_js, agree)
 
@@ -342,95 +404,111 @@ def run_analysis():
 
 
 # =========================
-# UI
+# Layout
 # =========================
-st.markdown('<div class="card">', unsafe_allow_html=True)
+left_col, right_col = st.columns([1, 3], gap="large")
 
-clinical = st.text_area(
-    "Clinical info (optional)",
-    placeholder="Age/sex, symptoms, duration, laterality, relevant history...",
-    height=120,
-    value=st.session_state.clinical
-)
-st.session_state.clinical = clinical or ""
-
-uploads = st.file_uploader(
-    "Upload retinal images",
-    type=["jpg", "jpeg", "png", "webp"],
-    accept_multiple_files=True,
-    key=f"uploader_{st.session_state.uploader_key}"
-)
-
-if uploads:
-    cols = st.columns(2)
-    show = uploads[:2]
-    for i, f in enumerate(show):
-        with cols[i % 2]:
-            st.image(f, caption=f.name, use_container_width=True)
-    if len(uploads) > 2:
-        st.caption(f"+ {len(uploads) - 2} more image(s) selected.")
-
-st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-
-analyze = st.button("🔎 Analyze", type="primary", use_container_width=True)
-
-if analyze:
-    if not uploads:
-        st.error("Please upload at least one image.")
+with left_col:
+    st.markdown("### Recent cases")
+    if st.session_state.case_history:
+        for i, item in enumerate(st.session_state.case_history):
+            st.markdown(
+                f"""
+                <div class="history-item">
+                    <div><strong>Case #{item['case_id']}</strong></div>
+                    <div class="muted">{item['diagnosis']}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            if st.button(f"Open Case #{item['case_id']}", key=f"open_case_{i}", use_container_width=True):
+                load_case_from_history(i)
+                st.rerun()
     else:
-        st.session_state.images = uploads_to_images(uploads)
-        run_analysis()
+        st.caption("No previous cases yet.")
 
-st.markdown("</div>", unsafe_allow_html=True)
+with right_col:
+    st.markdown('<div class="big-title">👁️ RetinaGPT</div>', unsafe_allow_html=True)
 
-
-# =========================
-# Output
-# =========================
-if st.session_state.final_report:
     st.markdown('<div class="card">', unsafe_allow_html=True)
 
-    tag = "✅ Agreement" if st.session_state.agreement else "⚠️ Disagreement"
-    st.markdown(
-        f'<span class="pill">{tag}</span> <span class="pill muted">Case #{st.session_state.case_id}</span>',
-        unsafe_allow_html=True
+    clinical = st.text_area(
+        "Clinical info (optional)",
+        placeholder="Age/sex, symptoms, duration, laterality, relevant history...",
+        height=120,
+        value=st.session_state.clinical
     )
+    st.session_state.clinical = clinical or ""
+
+    uploads = st.file_uploader(
+        "Upload retinal images",
+        type=["jpg", "jpeg", "png", "webp"],
+        accept_multiple_files=True,
+        key=f"uploader_{st.session_state.uploader_key}"
+    )
+
+    if uploads:
+        cols = st.columns(2)
+        show = uploads[:2]
+        for i, f in enumerate(show):
+            with cols[i % 2]:
+                st.image(f, caption=f.name, use_container_width=True)
+        if len(uploads) > 2:
+            st.caption(f"+ {len(uploads) - 2} more image(s) selected.")
+
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-    st.markdown(st.session_state.final_report)
+    analyze = st.button("🔎 Analyze", type="primary", use_container_width=True)
 
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-
-    if st.button("🆕 Ask new patient", use_container_width=True):
-        reset_case()
-        st.rerun()
+    if analyze:
+        if not uploads:
+            st.error("Please upload at least one image.")
+        else:
+            st.session_state.images = uploads_to_images(uploads)
+            run_analysis()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+    if st.session_state.final_report:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
 
-# =========================
-# Chat
-# =========================
-if st.session_state.final_report:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("💬 Follow-up chat")
+        tag = "✅ Agreement" if st.session_state.agreement else "⚠️ Disagreement"
+        st.markdown(
+            f'<span class="pill">{tag}</span> <span class="pill muted">Case #{st.session_state.case_id}</span>',
+            unsafe_allow_html=True
+        )
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-    for m in st.session_state.chat_history:
-        with st.chat_message(m["role"]):
-            st.write(m["content"])
+        st.markdown(st.session_state.final_report)
 
-    user_msg = st.chat_input("Ask a follow-up question…")
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-    if user_msg:
-        st.session_state.chat_history.append({"role": "user", "content": user_msg})
-        with st.chat_message("user"):
-            st.write(user_msg)
+        if st.button("🆕 Ask new patient", use_container_width=True):
+            reset_case()
+            st.rerun()
 
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                ans = chat_reply(user_msg)
-                st.write(ans)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-        st.session_state.chat_history.append({"role": "assistant", "content": ans})
+    if st.session_state.final_report:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("💬 Follow-up chat")
 
-    st.markdown("</div>", unsafe_allow_html=True)
+        for m in st.session_state.chat_history:
+            with st.chat_message(m["role"]):
+                st.write(m["content"])
+
+        user_msg = st.chat_input("Ask a follow-up question…")
+
+        if user_msg:
+            st.session_state.chat_history.append({"role": "user", "content": user_msg})
+            with st.chat_message("user"):
+                st.write(user_msg)
+
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    ans = chat_reply(user_msg)
+                    st.write(ans)
+
+            st.session_state.chat_history.append({"role": "assistant", "content": ans})
+
+        st.markdown("</div>", unsafe_allow_html=True)
