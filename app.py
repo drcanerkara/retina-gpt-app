@@ -283,7 +283,6 @@ def build_final_report(clinical_text: str, gemini_js: dict, openai_js: dict, agr
     })
 
     system = """
-system = """
 You are RetinaGPT Arbiter, a retina subspecialty clinical reasoning assistant.
 
 Generate ONE final educational report based on the two model opinions.
