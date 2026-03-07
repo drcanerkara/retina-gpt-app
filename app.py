@@ -2,6 +2,7 @@ import os
 import json
 import base64
 import re
+import time
 import streamlit as st
 
 from openai import OpenAI
@@ -9,48 +10,19 @@ from google import genai
 
 
 # =========================
-# Page config
+# Page
 # =========================
-st.set_page_config(
-    page_title="RetinaGPT",
-    page_icon="👁️",
-    layout="centered"
-)
+st.set_page_config(page_title="RetinaGPT", page_icon="👁️", layout="centered")
 
 st.markdown(
     """
     <style>
-      .block-container {
-          padding-top: 2rem;
-          padding-bottom: 2rem;
-          max-width: 880px;
-      }
-      .big-title {
-          font-size: 2.0rem;
-          font-weight: 800;
-          margin-bottom: 0.25rem;
-      }
-      .card {
-          border: 1px solid rgba(0,0,0,0.08);
-          border-radius: 14px;
-          padding: 16px;
-          background: white;
-      }
-      .divider {
-          height: 1px;
-          background: rgba(0,0,0,0.08);
-          margin: 14px 0;
-      }
-      .pill {
-          display: inline-block;
-          padding: 4px 10px;
-          border-radius: 999px;
-          border: 1px solid rgba(0,0,0,0.10);
-          font-size: 0.85rem;
-      }
-      .muted {
-          color: #6b7280;
-      }
+      .block-container {padding-top: 2rem; padding-bottom: 2rem; max-width: 880px;}
+      .big-title {font-size: 2.0rem; font-weight: 800; margin-bottom: 0.25rem;}
+      .card {border: 1px solid rgba(0,0,0,0.08); border-radius: 14px; padding: 16px; background: white;}
+      .divider {height: 1px; background: rgba(0,0,0,0.08); margin: 14px 0;}
+      .pill {display:inline-block; padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(0,0,0,0.10); font-size: 0.85rem;}
+      .muted {color:#6b7280;}
     </style>
     """,
     unsafe_allow_html=True
@@ -60,10 +32,10 @@ st.markdown('<div class="big-title">👁️ RetinaGPT</div>', unsafe_allow_html=
 
 
 # =========================
-# API Keys
+# Keys
 # =========================
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY", None)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
 
 if not OPENAI_API_KEY:
     st.error("Missing OPENAI_API_KEY.")
@@ -88,23 +60,30 @@ GEMINI_VISION_MODEL = "gemini-3-flash-preview"
 # =========================
 # Session state
 # =========================
-def init_session_state():
-    defaults = {
-        "case_id": 1,
-        "clinical": "",
-        "images": [],
-        "final_report": "",
-        "agreement": None,
-        "chat_history": [],
-        "analysis_done": False,
-        "uploader_key": 1,
-    }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+def ss_init():
+    if "case_id" not in st.session_state:
+        st.session_state.case_id = 1
+    if "clinical" not in st.session_state:
+        st.session_state.clinical = ""
+    if "images" not in st.session_state:
+        st.session_state.images = []
+    if "final_report" not in st.session_state:
+        st.session_state.final_report = ""
+    if "agreement" not in st.session_state:
+        st.session_state.agreement = None
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+    if "analysis_done" not in st.session_state:
+        st.session_state.analysis_done = False
+    if "uploader_key" not in st.session_state:
+        st.session_state.uploader_key = 1
+    if "last_error_type" not in st.session_state:
+        st.session_state.last_error_type = None
+    if "last_error_raw" not in st.session_state:
+        st.session_state.last_error_raw = ""
 
 
-init_session_state()
+ss_init()
 
 
 def reset_case():
@@ -116,34 +95,31 @@ def reset_case():
     st.session_state.chat_history = []
     st.session_state.analysis_done = False
     st.session_state.uploader_key += 1
+    st.session_state.last_error_type = None
+    st.session_state.last_error_raw = ""
 
 
 # =========================
-# Utility helpers
+# Helpers
 # =========================
 def b64_data_url(mime: str, data: bytes) -> str:
-    encoded = base64.b64encode(data).decode("utf-8")
-    return f"data:{mime};base64,{encoded}"
+    b64 = base64.b64encode(data).decode("utf-8")
+    return f"data:{mime};base64,{b64}"
 
 
 def safe_json_extract(text: str):
     if not text:
         return None
-
     text = text.strip()
-
     try:
         return json.loads(text)
     except Exception:
-        pass
-
-    match = re.search(r"\{.*\}", text, re.S)
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except Exception:
-            return None
-
+        m = re.search(r"\{.*\}", text, re.S)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                return None
     return None
 
 
@@ -158,25 +134,21 @@ def to_jsonable(obj):
         return {str(k): to_jsonable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple, set)):
         return [to_jsonable(x) for x in obj]
-
     if hasattr(obj, "model_dump"):
         try:
             return to_jsonable(obj.model_dump())
         except Exception:
             pass
-
     if hasattr(obj, "dict"):
         try:
             return to_jsonable(obj.dict())
         except Exception:
             pass
-
     if hasattr(obj, "__dict__"):
         try:
             return to_jsonable(vars(obj))
         except Exception:
             pass
-
     return str(obj)
 
 
@@ -189,27 +161,11 @@ def normalize_dx(dx: str) -> str:
 def overlap_top2(a: dict, b: dict) -> bool:
     a1 = normalize_dx((a or {}).get("top_diagnosis", ""))
     b1 = normalize_dx((b or {}).get("top_diagnosis", ""))
-
     if a1 and b1 and a1 == b1:
         return True
-
     a2 = [normalize_dx(x) for x in ((a or {}).get("top_differentials") or [])[:2]]
     b2 = [normalize_dx(x) for x in ((b or {}).get("top_differentials") or [])[:2]]
-
-    return (a1 in b2) or (b1 in a2) or bool(set(a2) & set(b2))
-
-
-def uploads_to_images(files):
-    images = []
-    for f in files or []:
-        images.append(
-            {
-                "name": f.name,
-                "mime": f.type or "image/jpeg",
-                "data": f.getvalue(),
-            }
-        )
-    return images
+    return (a1 in b2) or (b1 in a2) or (set(a2) & set(b2))
 
 
 VISION_JSON_SCHEMA = {
@@ -217,95 +173,114 @@ VISION_JSON_SCHEMA = {
     "top_differentials": ["string", "string", "string"],
     "key_evidence": ["string", "string", "string"],
     "confidence": "LOW|MODERATE|HIGH",
-    "requested_additional_info": ["string", "string", "string"],
+    "requested_additional_info": ["string", "string", "string"]
 }
 
 
+def uploads_to_images(files):
+    out = []
+    for f in files or []:
+        out.append({
+            "name": f.name,
+            "mime": f.type or "image/jpeg",
+            "data": f.getvalue()
+        })
+    return out
+
+
 # =========================
-# Model calls
+# Vision calls
 # =========================
 def call_openai_vision(clinical_text: str, images):
-    content = [
-        {
-            "type": "text",
-            "text": (
-                "You are a retina specialist. Analyze the provided retinal images and clinical info.\n"
-                "Return STRICT JSON ONLY, matching this key structure:\n"
-                f"{json.dumps(VISION_JSON_SCHEMA, ensure_ascii=False)}\n\n"
-                f"Clinical info:\n{clinical_text.strip() if clinical_text.strip() else '(none provided)'}"
-            ),
-        }
-    ]
+    content = [{
+        "type": "text",
+        "text": (
+            "You are a retina specialist. Analyze the provided retinal images + clinical info.\n"
+            "Return STRICT JSON ONLY, matching this key structure:\n"
+            f"{json.dumps(VISION_JSON_SCHEMA, ensure_ascii=False)}\n\n"
+            f"Clinical info:\n{clinical_text if clinical_text.strip() else '(none provided)'}"
+        )
+    }]
 
     for img in images:
-        content.append(
-            {
-                "type": "image_url",
-                "image_url": {"url": b64_data_url(img["mime"], img["data"])},
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": b64_data_url(img["mime"], img["data"])}
+        })
+
+    resp = openai_client.chat.completions.create(
+        model=OPENAI_VISION_MODEL,
+        messages=[{"role": "user", "content": content}],
+        temperature=0
+    )
+    raw = resp.choices[0].message.content or ""
+    return raw, safe_json_extract(raw)
+
+
+def call_gemini_vision(clinical_text: str, images, max_retries: int = 3):
+    parts = [{
+        "text": (
+            "You are a retina specialist. Analyze the provided retinal images + clinical info.\n"
+            "Return STRICT JSON ONLY, matching this key structure:\n"
+            f"{json.dumps(VISION_JSON_SCHEMA, ensure_ascii=False)}\n\n"
+            f"Clinical info:\n{clinical_text if clinical_text.strip() else '(none provided)'}"
+        )
+    }]
+
+    for img in images:
+        parts.append({
+            "inline_data": {
+                "mime_type": img["mime"],
+                "data": base64.b64encode(img["data"]).decode("utf-8")
             }
-        )
+        })
 
-    try:
-        resp = openai_client.chat.completions.create(
-            model=OPENAI_VISION_MODEL,
-            messages=[{"role": "user", "content": content}],
-            temperature=0,
-        )
-        raw = resp.choices[0].message.content or ""
-        return raw, safe_json_extract(raw)
-    except Exception as e:
-        return f"OpenAI vision error: {str(e)}", None
+    last_error = ""
 
-
-def call_gemini_vision(clinical_text: str, images):
-    parts = [
-        {
-            "text": (
-                "You are a retina specialist. Analyze the provided retinal images and clinical info.\n"
-                "Return STRICT JSON ONLY, matching this key structure:\n"
-                f"{json.dumps(VISION_JSON_SCHEMA, ensure_ascii=False)}\n\n"
-                f"Clinical info:\n{clinical_text.strip() if clinical_text.strip() else '(none provided)'}"
+    for attempt in range(max_retries):
+        try:
+            resp = gemini_client.models.generate_content(
+                model=GEMINI_VISION_MODEL,
+                contents=[{"role": "user", "parts": parts}],
+                config={"temperature": 0, "response_mime_type": "application/json"}
             )
-        }
-    ]
+            raw = getattr(resp, "text", None) or ""
+            parsed = safe_json_extract(raw)
 
-    for img in images:
-        parts.append(
-            {
-                "inline_data": {
-                    "mime_type": img["mime"],
-                    "data": base64.b64encode(img["data"]).decode("utf-8"),
-                }
-            }
-        )
+            if parsed:
+                return raw, parsed, None
 
-    try:
-        resp = gemini_client.models.generate_content(
-            model=GEMINI_VISION_MODEL,
-            contents=[{"role": "user", "parts": parts}],
-            config={
-                "temperature": 0,
-                "response_mime_type": "application/json",
-            },
-        )
-        raw = getattr(resp, "text", None) or ""
-        return raw, safe_json_extract(raw)
-    except Exception as e:
-        return f"Gemini vision error: {str(e)}", None
+            last_error = raw or "Gemini returned empty or invalid JSON."
+
+        except Exception as e:
+            last_error = f"Gemini vision error: {str(e)}"
+
+            if (
+                "503" in last_error
+                or "UNAVAILABLE" in last_error.upper()
+                or "high demand" in last_error.lower()
+                or "busy" in last_error.lower()
+            ):
+                if attempt < max_retries - 1:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                return last_error, None, "busy"
+
+            return last_error, None, "generic"
+
+    return last_error, None, "busy"
 
 
 # =========================
-# Final report builder
+# Final report
 # =========================
 def build_final_report(clinical_text: str, gemini_js: dict, openai_js: dict, agreement: bool):
-    payload = to_jsonable(
-        {
-            "clinical": clinical_text,
-            "gemini_opinion": gemini_js,
-            "openai_opinion": openai_js,
-            "agreement": agreement,
-        }
-    )
+    payload = to_jsonable({
+        "clinical": clinical_text,
+        "gemini_opinion": gemini_js,
+        "openai_opinion": openai_js,
+        "agreement": agreement
+    })
 
     system = """
 You are RetinaGPT Arbiter. Produce ONE final educational report.
@@ -325,62 +300,48 @@ Content requirements:
 - End with one short educational caution line.
 """
 
-    try:
-        resp = openai_client.chat.completions.create(
-            model=OPENAI_ARBITER_MODEL,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False, indent=2)},
-            ],
-            temperature=0,
-        )
-        return resp.choices[0].message.content or "No final report generated."
-    except Exception as e:
-        return f"Final report generation failed: {str(e)}"
+    resp = openai_client.chat.completions.create(
+        model=OPENAI_ARBITER_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False, indent=2)}
+        ],
+        temperature=0
+    )
+    return resp.choices[0].message.content or ""
 
 
 # =========================
-# Follow-up chat
+# Chat continuation
 # =========================
 def chat_reply(user_text: str):
-    context_pack = to_jsonable(
-        {
-            "case": st.session_state.case_id,
-            "clinical": st.session_state.clinical,
-            "final_report": st.session_state.final_report,
-        }
-    )
+    context_pack = to_jsonable({
+        "case": st.session_state.case_id,
+        "clinical": st.session_state.clinical,
+        "final_report": st.session_state.final_report
+    })
 
     system = """
 You are RetinaGPT (educational). Continue discussion for the SAME case.
 - Use the existing final report as the baseline.
-- If the user asks what to upload next, suggest the single most useful modality and what to look for.
+- If user asks what to upload next: suggest the single most useful modality and what to look for.
 - Keep outputs concise and structured.
-- Use retina subspecialty terminology where appropriate.
 """
 
     messages = [{"role": "system", "content": system}]
-    messages.append(
-        {
-            "role": "user",
-            "content": "CASE CONTEXT:\n" + json.dumps(context_pack, ensure_ascii=False, indent=2),
-        }
-    )
+    messages.append({"role": "user", "content": "CASE CONTEXT:\n" + json.dumps(context_pack, ensure_ascii=False, indent=2)})
 
     for m in st.session_state.chat_history[-20:]:
         messages.append({"role": m["role"], "content": m["content"]})
 
     messages.append({"role": "user", "content": user_text})
 
-    try:
-        resp = openai_client.chat.completions.create(
-            model=OPENAI_ARBITER_MODEL,
-            messages=messages,
-            temperature=0,
-        )
-        return resp.choices[0].message.content or "No reply generated."
-    except Exception as e:
-        return f"Chat reply failed: {str(e)}"
+    resp = openai_client.chat.completions.create(
+        model=OPENAI_ARBITER_MODEL,
+        messages=messages,
+        temperature=0
+    )
+    return resp.choices[0].message.content or ""
 
 
 # =========================
@@ -388,16 +349,21 @@ You are RetinaGPT (educational). Continue discussion for the SAME case.
 # =========================
 def run_analysis():
     images = st.session_state.images
-    clinical = st.session_state.clinical
+    clin = st.session_state.clinical
+
+    st.session_state.last_error_type = None
+    st.session_state.last_error_raw = ""
 
     with st.spinner("Analyzing..."):
-        gem_raw, gem_js = call_gemini_vision(clinical, images)
-        oa_raw, oa_js = call_openai_vision(clinical, images)
+        gem_raw, gem_js, gem_error_type = call_gemini_vision(clin, images)
+        _, oa_js = call_openai_vision(clin, images)
 
     if not gem_js:
-        st.error("Gemini did not return valid JSON.")
-        with st.expander("Gemini raw response"):
-            st.code(gem_raw)
+        st.session_state.last_error_type = gem_error_type or "generic"
+        st.session_state.last_error_raw = gem_raw or ""
+        st.session_state.final_report = ""
+        st.session_state.agreement = None
+        st.session_state.analysis_done = False
         return
 
     if not oa_js:
@@ -406,19 +372,19 @@ def run_analysis():
             "top_differentials": [],
             "key_evidence": [],
             "confidence": "LOW",
-            "requested_additional_info": [],
+            "requested_additional_info": []
         }
 
-    agreement = overlap_top2(gem_js, oa_js)
-    report = build_final_report(clinical, gem_js, oa_js, agreement)
+    agree = overlap_top2(gem_js, oa_js)
+    report = build_final_report(clin, gem_js, oa_js, agree)
 
     st.session_state.final_report = report
-    st.session_state.agreement = agreement
+    st.session_state.agreement = agree
     st.session_state.analysis_done = True
 
 
 # =========================
-# Main UI
+# UI
 # =========================
 st.markdown('<div class="card">', unsafe_allow_html=True)
 
@@ -426,7 +392,7 @@ clinical = st.text_area(
     "Clinical info (optional)",
     placeholder="Age/sex, symptoms, duration, laterality, relevant history...",
     height=120,
-    value=st.session_state.clinical,
+    value=st.session_state.clinical
 )
 st.session_state.clinical = clinical or ""
 
@@ -434,17 +400,15 @@ uploads = st.file_uploader(
     "Upload retinal images",
     type=["jpg", "jpeg", "png", "webp"],
     accept_multiple_files=True,
-    key=f"uploader_{st.session_state.uploader_key}",
+    key=f"uploader_{st.session_state.uploader_key}"
 )
 
 if uploads:
     cols = st.columns(2)
-    preview_files = uploads[:2]
-
-    for i, f in enumerate(preview_files):
+    show = uploads[:2]
+    for i, f in enumerate(show):
         with cols[i % 2]:
             st.image(f, caption=f.name, use_container_width=True)
-
     if len(uploads) > 2:
         st.caption(f"+ {len(uploads) - 2} more image(s) selected.")
 
@@ -458,12 +422,63 @@ if analyze:
     else:
         st.session_state.images = uploads_to_images(uploads)
         run_analysis()
+        st.rerun()
 
 st.markdown("</div>", unsafe_allow_html=True)
 
 
 # =========================
-# Final output
+# Friendly Gemini error UI
+# =========================
+if st.session_state.last_error_type == "busy":
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    st.warning("System is busy at the moment. Please retry in a few seconds.")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("🔁 Retry analysis", use_container_width=True):
+            if st.session_state.images:
+                run_analysis()
+                st.rerun()
+
+    with col2:
+        if st.button("🆕 Start new case", use_container_width=True):
+            reset_case()
+            st.rerun()
+
+    with st.expander("Technical details"):
+        st.code(st.session_state.last_error_raw or "No technical details available.")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+elif st.session_state.last_error_type:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    st.warning("Analysis could not be completed. Please retry.")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("🔁 Retry analysis", use_container_width=True):
+            if st.session_state.images:
+                run_analysis()
+                st.rerun()
+
+    with col2:
+        if st.button("🆕 Start new case", use_container_width=True):
+            reset_case()
+            st.rerun()
+
+    with st.expander("Technical details"):
+        st.code(st.session_state.last_error_raw or "No technical details available.")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# =========================
+# Output
 # =========================
 if st.session_state.final_report:
     st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -471,7 +486,7 @@ if st.session_state.final_report:
     tag = "✅ Agreement" if st.session_state.agreement else "⚠️ Disagreement"
     st.markdown(
         f'<span class="pill">{tag}</span> <span class="pill muted">Case #{st.session_state.case_id}</span>',
-        unsafe_allow_html=True,
+        unsafe_allow_html=True
     )
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
@@ -487,7 +502,7 @@ if st.session_state.final_report:
 
 
 # =========================
-# Follow-up chat UI
+# Chat
 # =========================
 if st.session_state.final_report:
     st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -501,15 +516,14 @@ if st.session_state.final_report:
 
     if user_msg:
         st.session_state.chat_history.append({"role": "user", "content": user_msg})
-
         with st.chat_message("user"):
             st.write(user_msg)
 
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                answer = chat_reply(user_msg)
-                st.write(answer)
+                ans = chat_reply(user_msg)
+                st.write(ans)
 
-        st.session_state.chat_history.append({"role": "assistant", "content": answer})
+        st.session_state.chat_history.append({"role": "assistant", "content": ans})
 
     st.markdown("</div>", unsafe_allow_html=True)
