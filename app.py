@@ -85,7 +85,7 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 OPENAI_VISION_MODEL = "gpt-4o"
 OPENAI_ARBITER_MODEL = "gpt-4o-mini"
 GEMINI_VISION_MODEL = "gemini-3-flash-preview"
-# Daha stabil istersen:
+# İstersen daha stabil deneme:
 # GEMINI_VISION_MODEL = "gemini-1.5-pro"
 
 
@@ -119,6 +119,8 @@ def ss_init():
         st.session_state.additional_clinical_note = ""
     if "add_uploader_key" not in st.session_state:
         st.session_state.add_uploader_key = 1
+    if "additional_modality" not in st.session_state:
+        st.session_state.additional_modality = "OCT"
 
 
 ss_init()
@@ -138,6 +140,7 @@ def reset_case():
     st.session_state.last_error_raw = ""
     st.session_state.additional_clinical_note = ""
     st.session_state.add_uploader_key += 1
+    st.session_state.additional_modality = "OCT"
 
 
 # =========================
@@ -400,6 +403,8 @@ DECISION RULES
 - If there is disagreement, still provide the most likely diagnosis but reflect uncertainty appropriately.
 - Do not mention the internal model names.
 - If this is an updated assessment after additional imaging, explicitly mention how the newly added imaging supports, refines, or changes the working diagnosis when relevant.
+- In "Suggested additional imaging", do not recommend modalities that are already clearly available in the current case data.
+- If newly added imaging already includes OCT, FAF, FA, OCTA, ICGA, or wide-field imaging, suggest only still-missing modalities that would provide additional diagnostic value.
 """
 
     try:
@@ -647,9 +652,32 @@ if st.session_state.report_history:
 
     st.caption("Upload additional multimodal imaging for the same case and append an updated assessment below.")
 
+    modality_options = [
+        "OCT",
+        "Fundus photo",
+        "FAF",
+        "FA",
+        "OCTA",
+        "ICGA",
+        "Wide-field imaging",
+        "Other",
+    ]
+
+    current_modality = st.session_state.additional_modality
+    if current_modality not in modality_options:
+        current_modality = "Other"
+
+    extra_modality = st.selectbox(
+        "Imaging modality",
+        modality_options,
+        index=modality_options.index(current_modality),
+        key="extra_modality_box",
+    )
+    st.session_state.additional_modality = extra_modality
+
     extra_note = st.text_area(
         "Additional clinical note (optional)",
-        placeholder="Example: OCT added, FA performed, symptoms progressed, unilateral confirmed...",
+        placeholder="Example: Macular edema is better delineated on OCT, FA shows leakage, OCTA suggests type 1 MNV...",
         value=st.session_state.additional_clinical_note,
         key="additional_note_box",
         height=90,
@@ -682,17 +710,23 @@ if st.session_state.report_history:
                 new_images = uploads_to_images(extra_uploads)
                 st.session_state.images = merge_images(st.session_state.images, new_images)
 
+            modality_note = f"Newly added imaging modality: {st.session_state.additional_modality}"
+
+            combined_update_note = modality_note
             if st.session_state.additional_clinical_note.strip():
-                if st.session_state.clinical.strip():
-                    st.session_state.clinical = (
-                        st.session_state.clinical.strip()
-                        + "\n\nAdditional update:\n"
-                        + st.session_state.additional_clinical_note.strip()
-                    )
-                else:
-                    st.session_state.clinical = st.session_state.additional_clinical_note.strip()
+                combined_update_note += "\n" + st.session_state.additional_clinical_note.strip()
+
+            if st.session_state.clinical.strip():
+                st.session_state.clinical = (
+                    st.session_state.clinical.strip()
+                    + "\n\nAdditional update:\n"
+                    + combined_update_note
+                )
+            else:
+                st.session_state.clinical = combined_update_note
 
             st.session_state.additional_clinical_note = ""
+            st.session_state.additional_modality = "OCT"
             st.session_state.add_uploader_key += 1
 
             run_analysis()
