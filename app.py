@@ -20,7 +20,7 @@ st.markdown(
       .block-container {
           padding-top: 2rem;
           padding-bottom: 2rem;
-          max-width: 880px;
+          max-width: 920px;
       }
       .big-title {
           font-size: 2.0rem;
@@ -53,12 +53,17 @@ st.markdown(
           padding-left: 12px;
           margin-top: 8px;
       }
+      .small-note {
+          font-size: 0.9rem;
+          color: #6b7280;
+      }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 st.markdown('<div class="big-title">👁️ RetinaGPT</div>', unsafe_allow_html=True)
+st.caption("Structured clinical input improves multimodal retinal diagnostic reasoning.")
 
 
 # =========================
@@ -85,7 +90,7 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 OPENAI_VISION_MODEL = "gpt-4o"
 OPENAI_ARBITER_MODEL = "gpt-4o-mini"
 GEMINI_VISION_MODEL = "gemini-3-flash-preview"
-# İstersen daha stabil deneme:
+# Daha stabil bir alternatif denemek istersen:
 # GEMINI_VISION_MODEL = "gemini-1.5-pro"
 
 
@@ -93,34 +98,36 @@ GEMINI_VISION_MODEL = "gemini-3-flash-preview"
 # Session state
 # =========================
 def ss_init():
-    if "case_id" not in st.session_state:
-        st.session_state.case_id = 1
-    if "clinical" not in st.session_state:
-        st.session_state.clinical = ""
-    if "images" not in st.session_state:
-        st.session_state.images = []
-    if "final_report" not in st.session_state:
-        st.session_state.final_report = ""
-    if "report_history" not in st.session_state:
-        st.session_state.report_history = []
-    if "agreement" not in st.session_state:
-        st.session_state.agreement = None
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-    if "analysis_done" not in st.session_state:
-        st.session_state.analysis_done = False
-    if "uploader_key" not in st.session_state:
-        st.session_state.uploader_key = 1
-    if "last_error_type" not in st.session_state:
-        st.session_state.last_error_type = None
-    if "last_error_raw" not in st.session_state:
-        st.session_state.last_error_raw = ""
-    if "additional_clinical_note" not in st.session_state:
-        st.session_state.additional_clinical_note = ""
-    if "add_uploader_key" not in st.session_state:
-        st.session_state.add_uploader_key = 1
-    if "additional_modality" not in st.session_state:
-        st.session_state.additional_modality = "OCT"
+    defaults = {
+        "case_id": 1,
+        "images": [],
+        "final_report": "",
+        "report_history": [],
+        "agreement": None,
+        "chat_history": [],
+        "analysis_done": False,
+        "uploader_key": 1,
+        "last_error_type": None,
+        "last_error_raw": "",
+        "additional_clinical_note": "",
+        "add_uploader_key": 1,
+        "additional_modality": "OCT",
+        # structured clinical fields
+        "age": None,
+        "sex": "Select",
+        "laterality": "Select",
+        "visual_acuity": "",
+        "primary_symptom": "",
+        "duration": "",
+        "relevant_history": "",
+        "additional_notes": "",
+        # frozen text sent to models
+        "clinical": "",
+    }
+
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
 
 ss_init()
@@ -128,7 +135,6 @@ ss_init()
 
 def reset_case():
     st.session_state.case_id += 1
-    st.session_state.clinical = ""
     st.session_state.images = []
     st.session_state.final_report = ""
     st.session_state.report_history = []
@@ -141,6 +147,16 @@ def reset_case():
     st.session_state.additional_clinical_note = ""
     st.session_state.add_uploader_key += 1
     st.session_state.additional_modality = "OCT"
+
+    st.session_state.age = None
+    st.session_state.sex = "Select"
+    st.session_state.laterality = "Select"
+    st.session_state.visual_acuity = ""
+    st.session_state.primary_symptom = ""
+    st.session_state.duration = ""
+    st.session_state.relevant_history = ""
+    st.session_state.additional_notes = ""
+    st.session_state.clinical = ""
 
 
 # =========================
@@ -250,6 +266,29 @@ def get_current_assessment_label():
     if len(st.session_state.report_history) == 0:
         return "Initial assessment"
     return f"Updated assessment {len(st.session_state.report_history)}"
+
+
+def build_clinical_summary():
+    lines = []
+
+    if st.session_state.age is not None:
+        lines.append(f"Age: {st.session_state.age}")
+    if st.session_state.sex and st.session_state.sex != "Select":
+        lines.append(f"Sex: {st.session_state.sex}")
+    if st.session_state.laterality and st.session_state.laterality != "Select":
+        lines.append(f"Laterality: {st.session_state.laterality}")
+    if st.session_state.visual_acuity.strip():
+        lines.append(f"Visual acuity: {st.session_state.visual_acuity.strip()}")
+    if st.session_state.primary_symptom.strip():
+        lines.append(f"Primary symptom: {st.session_state.primary_symptom.strip()}")
+    if st.session_state.duration.strip():
+        lines.append(f"Duration: {st.session_state.duration.strip()}")
+    if st.session_state.relevant_history.strip():
+        lines.append(f"Relevant history: {st.session_state.relevant_history.strip()}")
+    if st.session_state.additional_notes.strip():
+        lines.append(f"Additional notes: {st.session_state.additional_notes.strip()}")
+
+    return "\n".join(lines).strip()
 
 
 # =========================
@@ -399,6 +438,7 @@ STYLE
 - Avoid unnecessary explanations
 
 DECISION RULES
+- Use the provided clinical information actively in the reasoning.
 - If both models agree, present the diagnosis with higher confidence.
 - If there is disagreement, still provide the most likely diagnosis but reflect uncertainty appropriately.
 - Do not mention the internal model names.
@@ -437,6 +477,7 @@ def chat_reply(user_text: str):
     system = """
 You are RetinaGPT (educational). Continue discussion for the SAME case.
 - Use the latest final report as the baseline.
+- Use the structured clinical information as part of the case context.
 - If the user asks what to upload next, suggest the single most useful modality and what to look for.
 - Keep outputs concise and structured.
 - Use retina subspecialty terminology.
@@ -516,17 +557,89 @@ def run_analysis():
 
 
 # =========================
-# UI - main input
+# UI - structured clinical input
 # =========================
 st.markdown('<div class="card">', unsafe_allow_html=True)
+st.subheader("Clinical information")
 
-clinical = st.text_area(
-    "Clinical info (optional)",
-    placeholder="Age/sex, symptoms, duration, laterality, relevant history...",
-    height=120,
-    value=st.session_state.clinical,
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    age = st.number_input(
+        "Age *",
+        min_value=0,
+        max_value=120,
+        value=st.session_state.age if st.session_state.age is not None else 0,
+        step=1,
+    )
+
+with col2:
+    sex = st.selectbox(
+        "Sex *",
+        ["Select", "Male", "Female", "Other"],
+        index=["Select", "Male", "Female", "Other"].index(st.session_state.sex if st.session_state.sex in ["Select", "Male", "Female", "Other"] else "Select"),
+    )
+
+with col3:
+    laterality = st.selectbox(
+        "Laterality *",
+        ["Select", "Unilateral", "Bilateral"],
+        index=["Select", "Unilateral", "Bilateral"].index(
+            st.session_state.laterality if st.session_state.laterality in ["Select", "Unilateral", "Bilateral"] else "Select"
+        ),
+    )
+
+col4, col5 = st.columns(2)
+
+with col4:
+    visual_acuity = st.text_input(
+        "Visual acuity (optional)",
+        value=st.session_state.visual_acuity,
+        placeholder="e.g. 20/40, 0.3, CF at 2 m",
+    )
+
+with col5:
+    primary_symptom = st.text_input(
+        "Primary symptom (optional)",
+        value=st.session_state.primary_symptom,
+        placeholder="e.g. blurred vision, metamorphopsia, asymptomatic",
+    )
+
+col6, col7 = st.columns(2)
+
+with col6:
+    duration = st.text_input(
+        "Duration (optional)",
+        value=st.session_state.duration,
+        placeholder="e.g. acute, 3 days, chronic, 2 months",
+    )
+
+with col7:
+    relevant_history = st.text_input(
+        "Relevant history (optional)",
+        value=st.session_state.relevant_history,
+        placeholder="e.g. diabetes, high myopia, recent viral illness",
+    )
+
+additional_notes = st.text_area(
+    "Additional notes (optional)",
+    value=st.session_state.additional_notes,
+    placeholder="Any extra clinical context...",
+    height=90,
 )
-st.session_state.clinical = clinical or ""
+
+st.session_state.age = int(age)
+st.session_state.sex = sex
+st.session_state.laterality = laterality
+st.session_state.visual_acuity = visual_acuity or ""
+st.session_state.primary_symptom = primary_symptom or ""
+st.session_state.duration = duration or ""
+st.session_state.relevant_history = relevant_history or ""
+st.session_state.additional_notes = additional_notes or ""
+
+st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+
+st.subheader("Retinal images")
 
 uploads = st.file_uploader(
     "Upload retinal images",
@@ -545,13 +658,24 @@ if uploads:
         st.caption(f"+ {len(uploads) - 2} more image(s) selected.")
 
 st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+st.markdown('<span class="small-note">* Required fields: Age, Sex, Laterality</span>', unsafe_allow_html=True)
 
 analyze = st.button("🔎 Analyze", type="primary", use_container_width=True)
 
 if analyze:
-    if not uploads:
+    missing = []
+
+    if st.session_state.sex == "Select":
+        missing.append("Sex")
+    if st.session_state.laterality == "Select":
+        missing.append("Laterality")
+
+    if missing:
+        st.error("Please complete the required clinical fields: " + ", ".join(missing))
+    elif not uploads:
         st.error("Please upload at least one image.")
     else:
+        st.session_state.clinical = build_clinical_summary()
         st.session_state.images = uploads_to_images(uploads)
         run_analysis()
         st.rerun()
