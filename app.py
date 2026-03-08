@@ -90,7 +90,7 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 OPENAI_VISION_MODEL = "gpt-4o"
 OPENAI_ARBITER_MODEL = "gpt-4o-mini"
 GEMINI_VISION_MODEL = "gemini-3-flash-preview"
-# Daha stabil bir alternatif denemek istersen:
+# Daha stabil denemek istersen:
 # GEMINI_VISION_MODEL = "gemini-1.5-pro"
 
 
@@ -104,6 +104,8 @@ def ss_init():
         "final_report": "",
         "report_history": [],
         "agreement": None,
+        "confidence_label": "",
+        "confidence_icon": "",
         "chat_history": [],
         "analysis_done": False,
         "uploader_key": 1,
@@ -139,6 +141,8 @@ def reset_case():
     st.session_state.final_report = ""
     st.session_state.report_history = []
     st.session_state.agreement = None
+    st.session_state.confidence_label = ""
+    st.session_state.confidence_icon = ""
     st.session_state.chat_history = []
     st.session_state.analysis_done = False
     st.session_state.uploader_key += 1
@@ -221,6 +225,15 @@ def normalize_dx(dx: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", dx.lower()).strip()
 
 
+def normalize_confidence(value: str) -> str:
+    if not value:
+        return "LOW"
+    v = str(value).strip().upper()
+    if v in {"HIGH", "MODERATE", "LOW"}:
+        return v
+    return "LOW"
+
+
 def overlap_top2(a: dict, b: dict) -> bool:
     a1 = normalize_dx((a or {}).get("top_diagnosis", ""))
     b1 = normalize_dx((b or {}).get("top_diagnosis", ""))
@@ -232,6 +245,18 @@ def overlap_top2(a: dict, b: dict) -> bool:
     b2 = [normalize_dx(x) for x in ((b or {}).get("top_differentials") or [])[:2]]
 
     return (a1 in b2) or (b1 in a2) or bool(set(a2) & set(b2))
+
+
+def derive_confidence_badge(gemini_js: dict, openai_js: dict, agreement: bool):
+    gem_conf = normalize_confidence((gemini_js or {}).get("confidence", "LOW"))
+    oa_conf = normalize_confidence((openai_js or {}).get("confidence", "LOW"))
+
+    if agreement:
+        if gem_conf == "HIGH" and oa_conf == "HIGH":
+            return "High", "🟢"
+        return "Moderate", "🟡"
+
+    return "Low", "🔴"
 
 
 VISION_JSON_SCHEMA = {
@@ -471,6 +496,7 @@ def chat_reply(user_text: str):
             "clinical": st.session_state.clinical,
             "final_report": st.session_state.final_report,
             "report_history": st.session_state.report_history,
+            "confidence_label": st.session_state.confidence_label,
         }
     )
 
@@ -526,6 +552,8 @@ def run_analysis():
         st.session_state.last_error_raw = gem_raw or ""
         st.session_state.final_report = ""
         st.session_state.agreement = None
+        st.session_state.confidence_label = ""
+        st.session_state.confidence_icon = ""
         st.session_state.analysis_done = False
         return
 
@@ -539,6 +567,8 @@ def run_analysis():
         }
 
     agree = overlap_top2(gem_js, oa_js)
+    confidence_label, confidence_icon = derive_confidence_badge(gem_js, oa_js, agree)
+
     label = get_current_assessment_label()
     is_update = len(st.session_state.report_history) > 0
 
@@ -549,10 +579,13 @@ def run_analysis():
         {
             "label": label,
             "report": report,
-            "agreement": agree,
+            "confidence_label": confidence_label,
+            "confidence_icon": confidence_icon,
         }
     )
     st.session_state.agreement = agree
+    st.session_state.confidence_label = confidence_label
+    st.session_state.confidence_icon = confidence_icon
     st.session_state.analysis_done = True
 
 
@@ -565,11 +598,12 @@ st.subheader("Clinical information")
 col1, col2, col3 = st.columns(3)
 
 with col1:
+    age_default = st.session_state.age if st.session_state.age is not None else 0
     age = st.number_input(
         "Age *",
         min_value=0,
         max_value=120,
-        value=st.session_state.age if st.session_state.age is not None else 0,
+        value=age_default,
         step=1,
     )
 
@@ -577,7 +611,9 @@ with col2:
     sex = st.selectbox(
         "Sex *",
         ["Select", "Male", "Female", "Other"],
-        index=["Select", "Male", "Female", "Other"].index(st.session_state.sex if st.session_state.sex in ["Select", "Male", "Female", "Other"] else "Select"),
+        index=["Select", "Male", "Female", "Other"].index(
+            st.session_state.sex if st.session_state.sex in ["Select", "Male", "Female", "Other"] else "Select"
+        ),
     )
 
 with col3:
@@ -739,18 +775,18 @@ elif st.session_state.last_error_type:
 if st.session_state.report_history:
     st.markdown('<div class="card">', unsafe_allow_html=True)
 
-    latest_tag = "✅ Agreement" if st.session_state.agreement else "⚠️ Disagreement"
+    latest_badge = f"{st.session_state.confidence_icon} Diagnostic confidence: {st.session_state.confidence_label}"
     st.markdown(
-        f'<span class="pill">{latest_tag}</span> <span class="pill muted">Case #{st.session_state.case_id}</span>',
+        f'<span class="pill">{latest_badge}</span> <span class="pill muted">Case #{st.session_state.case_id}</span>',
         unsafe_allow_html=True,
     )
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
     for idx, item in enumerate(st.session_state.report_history):
-        item_tag = "✅ Agreement" if item.get("agreement") else "⚠️ Disagreement"
+        item_badge = f"{item.get('confidence_icon', '🟡')} Diagnostic confidence: {item.get('confidence_label', 'Moderate')}"
 
         st.markdown(f"### {item['label']}")
-        st.markdown(f'<span class="pill muted">{item_tag}</span>', unsafe_allow_html=True)
+        st.markdown(f'<span class="pill muted">{item_badge}</span>', unsafe_allow_html=True)
         st.markdown('<div class="subtle-box">', unsafe_allow_html=True)
         st.markdown(item["report"])
         st.markdown("</div>", unsafe_allow_html=True)
