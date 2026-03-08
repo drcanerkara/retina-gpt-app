@@ -48,6 +48,11 @@ st.markdown(
       .muted {
           color: #6b7280;
       }
+      .subtle-box {
+          border-left: 3px solid rgba(0,0,0,0.08);
+          padding-left: 12px;
+          margin-top: 8px;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -80,7 +85,7 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 OPENAI_VISION_MODEL = "gpt-4o"
 OPENAI_ARBITER_MODEL = "gpt-4o-mini"
 GEMINI_VISION_MODEL = "gemini-3-flash-preview"
-# İstersen bunu daha stabil model ile değiştirebilirsin:
+# Daha stabil istersen:
 # GEMINI_VISION_MODEL = "gemini-1.5-pro"
 
 
@@ -96,6 +101,8 @@ def ss_init():
         st.session_state.images = []
     if "final_report" not in st.session_state:
         st.session_state.final_report = ""
+    if "report_history" not in st.session_state:
+        st.session_state.report_history = []
     if "agreement" not in st.session_state:
         st.session_state.agreement = None
     if "chat_history" not in st.session_state:
@@ -122,6 +129,7 @@ def reset_case():
     st.session_state.clinical = ""
     st.session_state.images = []
     st.session_state.final_report = ""
+    st.session_state.report_history = []
     st.session_state.agreement = None
     st.session_state.chat_history = []
     st.session_state.analysis_done = False
@@ -197,6 +205,7 @@ def normalize_dx(dx: str) -> str:
 def overlap_top2(a: dict, b: dict) -> bool:
     a1 = normalize_dx((a or {}).get("top_diagnosis", ""))
     b1 = normalize_dx((b or {}).get("top_diagnosis", ""))
+
     if a1 and b1 and a1 == b1:
         return True
 
@@ -232,6 +241,12 @@ def merge_images(old_images, new_images):
     merged = list(old_images or [])
     merged.extend(new_images or [])
     return merged
+
+
+def get_current_assessment_label():
+    if len(st.session_state.report_history) == 0:
+        return "Initial assessment"
+    return f"Updated assessment {len(st.session_state.report_history)}"
 
 
 # =========================
@@ -322,7 +337,7 @@ def call_gemini_vision(clinical_text: str, images, max_retries: int = 3):
                 or "busy" in last_error.lower()
             ):
                 if attempt < max_retries - 1:
-                    time.sleep(2 * (attempt + 1))  # 2s, 4s, 6s
+                    time.sleep(2 * (attempt + 1))
                     continue
                 return last_error, None, "busy"
 
@@ -334,13 +349,14 @@ def call_gemini_vision(clinical_text: str, images, max_retries: int = 3):
 # =========================
 # Final report
 # =========================
-def build_final_report(clinical_text: str, gemini_js: dict, openai_js: dict, agreement: bool):
+def build_final_report(clinical_text: str, gemini_js: dict, openai_js: dict, agreement: bool, is_update: bool):
     payload = to_jsonable(
         {
             "clinical": clinical_text,
             "gemini_opinion": gemini_js,
             "openai_opinion": openai_js,
             "agreement": agreement,
+            "is_update": is_update,
         }
     )
 
@@ -383,6 +399,7 @@ DECISION RULES
 - If both models agree, present the diagnosis with higher confidence.
 - If there is disagreement, still provide the most likely diagnosis but reflect uncertainty appropriately.
 - Do not mention the internal model names.
+- If this is an updated assessment after additional imaging, explicitly mention how the newly added imaging supports, refines, or changes the working diagnosis when relevant.
 """
 
     try:
@@ -408,12 +425,13 @@ def chat_reply(user_text: str):
             "case": st.session_state.case_id,
             "clinical": st.session_state.clinical,
             "final_report": st.session_state.final_report,
+            "report_history": st.session_state.report_history,
         }
     )
 
     system = """
 You are RetinaGPT (educational). Continue discussion for the SAME case.
-- Use the existing final report as the baseline.
+- Use the latest final report as the baseline.
 - If the user asks what to upload next, suggest the single most useful modality and what to look for.
 - Keep outputs concise and structured.
 - Use retina subspecialty terminology.
@@ -475,9 +493,19 @@ def run_analysis():
         }
 
     agree = overlap_top2(gem_js, oa_js)
-    report = build_final_report(clin, gem_js, oa_js, agree)
+    label = get_current_assessment_label()
+    is_update = len(st.session_state.report_history) > 0
+
+    report = build_final_report(clin, gem_js, oa_js, agree, is_update)
 
     st.session_state.final_report = report
+    st.session_state.report_history.append(
+        {
+            "label": label,
+            "report": report,
+            "agreement": agree,
+        }
+    )
     st.session_state.agreement = agree
     st.session_state.analysis_done = True
 
@@ -577,19 +605,29 @@ elif st.session_state.last_error_type:
 
 
 # =========================
-# Output
+# Output history
 # =========================
-if st.session_state.final_report:
+if st.session_state.report_history:
     st.markdown('<div class="card">', unsafe_allow_html=True)
 
-    tag = "✅ Agreement" if st.session_state.agreement else "⚠️ Disagreement"
+    latest_tag = "✅ Agreement" if st.session_state.agreement else "⚠️ Disagreement"
     st.markdown(
-        f'<span class="pill">{tag}</span> <span class="pill muted">Case #{st.session_state.case_id}</span>',
+        f'<span class="pill">{latest_tag}</span> <span class="pill muted">Case #{st.session_state.case_id}</span>',
         unsafe_allow_html=True,
     )
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-    st.markdown(st.session_state.final_report)
+    for idx, item in enumerate(st.session_state.report_history):
+        item_tag = "✅ Agreement" if item.get("agreement") else "⚠️ Disagreement"
+
+        st.markdown(f"### {item['label']}")
+        st.markdown(f'<span class="pill muted">{item_tag}</span>', unsafe_allow_html=True)
+        st.markdown('<div class="subtle-box">', unsafe_allow_html=True)
+        st.markdown(item["report"])
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        if idx < len(st.session_state.report_history) - 1:
+            st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
@@ -603,11 +641,11 @@ if st.session_state.final_report:
 # =========================
 # Add more images / update diagnosis
 # =========================
-if st.session_state.final_report:
+if st.session_state.report_history:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("➕ Add additional imaging")
 
-    st.caption("Upload additional multimodal imaging for the same case and refresh the diagnostic assessment.")
+    st.caption("Upload additional multimodal imaging for the same case and append an updated assessment below.")
 
     extra_note = st.text_area(
         "Additional clinical note (optional)",
@@ -666,7 +704,7 @@ if st.session_state.final_report:
 # =========================
 # Chat
 # =========================
-if st.session_state.final_report:
+if st.session_state.report_history:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("💬 Follow-up chat")
 
