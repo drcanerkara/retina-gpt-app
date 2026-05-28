@@ -101,7 +101,7 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 # =========================
 OPENAI_VISION_MODEL  = "gpt-4o"
 OPENAI_ARBITER_MODEL = "gpt-4o-mini"
-GEMINI_VISION_MODEL  = "gemini-2.5-flash-preview-05-20"
+GEMINI_VISION_MODEL  = "gemini-2.5-flash"
 
 
 # =========================
