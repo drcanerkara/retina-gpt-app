@@ -251,29 +251,6 @@ html, body, [class*="css"] {
 </style>
 """, unsafe_allow_html=True)
 
-# ── Sheets connection test (temporary debug) ─────────────────────────────
-if st.sidebar.button("Test Sheets Connection"):
-    with st.sidebar:
-        try:
-            if not SHEETS_AVAILABLE:
-                st.error("gspread not available")
-            elif not SHEETS_ID:
-                st.error(f"SHEETS_ID missing. Value: {SHEETS_ID!r}")
-            elif "gcp_service_account" not in st.secrets:
-                st.error("gcp_service_account not in secrets")
-            else:
-                creds_dict = dict(st.secrets["gcp_service_account"])
-                st.write("Keys in creds:", list(creds_dict.keys()))
-                scopes = ["https://www.googleapis.com/auth/spreadsheets",
-                          "https://www.googleapis.com/auth/drive"]
-                creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-                gc = gspread.authorize(creds)
-                sh = gc.open_by_key(SHEETS_ID)
-                ws = sh.sheet1
-                st.success(f"Connected! Sheet: {sh.title}")
-        except Exception as e:
-            st.error(f"Error: {e}")
-
 # ── Header ──────────────────────────────────────────────────────────────────
 st.markdown('''
 <div class="rgpt-header">
@@ -309,6 +286,29 @@ if not GEMINI_API_KEY:
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+
+
+# ── Sheets connection test (debug sidebar) ───────────────────────────────────
+if st.sidebar.button("Test Sheets Connection"):
+    with st.sidebar:
+        try:
+            if not SHEETS_AVAILABLE:
+                st.error("gspread not available")
+            elif not SHEETS_ID:
+                st.error(f"SHEETS_ID missing. Value: {SHEETS_ID!r}")
+            elif "gcp_service_account" not in st.secrets:
+                st.error("gcp_service_account not in secrets")
+            else:
+                creds_dict = dict(st.secrets["gcp_service_account"])
+                st.write("Keys:", list(creds_dict.keys()))
+                scopes = ["https://www.googleapis.com/auth/spreadsheets",
+                          "https://www.googleapis.com/auth/drive"]
+                creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+                gc = gspread.authorize(creds)
+                sh = gc.open_by_key(SHEETS_ID)
+                st.success(f"Connected! Sheet: {sh.title}")
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
 
 
 # =========================
