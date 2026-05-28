@@ -1324,7 +1324,7 @@ with col2:
 st.markdown('''<div style="background:#D1F2EB;border-left:3px solid #0E6655;border-radius:0 8px 8px 0;
      padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
      letter-spacing:0.8px;text-transform:uppercase;color:#0B5345;">
-  K1 — Triaj Bilgisi
+  K1 — Klinik Bilgi
 </div>''', unsafe_allow_html=True)
 
 col3, col4, col5 = st.columns(3)
@@ -1333,7 +1333,7 @@ with col3:
     laterality_map = {"Select":"Select","OD (Right)":"OD (Right)","OS (Left)":"OS (Left)",
                       "OU (Both)":"OU (Both)","Unilateral":"OD (Right)","Bilateral":"OU (Both)"}
     cur_lat = laterality_map.get(st.session_state.laterality, "Select")
-    laterality = st.selectbox("Laterality", lat_opts,
+    laterality = st.selectbox("Laterality (optional)", lat_opts,
                                index=lat_opts.index(cur_lat if cur_lat in lat_opts else "Select"))
 with col4:
     va_opts = ["Select","20/20 – 20/40 (iyi)","20/50 – 20/200 (orta)",
@@ -1493,15 +1493,14 @@ if uploads:
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('<div style="margin-top:8px;">', unsafe_allow_html=True)
-st.markdown('<span class="small-note">* Age, Sex, Laterality required. Tag each image with its modality above.</span>', unsafe_allow_html=True)
+st.markdown('<span class="small-note">* Age and Sex required. Laterality optional (K0) or recommended (K1+).</span>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
 analyze = st.button("🔬  Analyze  —  3-Round Debate", type="primary", use_container_width=True)
 
 if analyze:
     missing = []
-    if sex == "Select":        missing.append("Sex")
-    if laterality == "Select": missing.append("Laterality")
+    if sex == "Select": missing.append("Sex")
     if missing:
         st.error("Please complete required fields: " + ", ".join(missing))
     elif not uploads:
