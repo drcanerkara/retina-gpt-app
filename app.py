@@ -326,7 +326,7 @@ SHEETS_COLUMNS = [
     "agreed_r1","agreed_r3","debate_changed",
     "oa_revision_type","gem_revision_type","critique_failed",
     "final_diagnosis","final_confidence",
-    "ref_diagnosis","correctness_arm_a","correctness_arm_b","correctness_arm_d","grader_notes",
+    "high_uncertainty_case","ref_diagnosis","correctness_arm_a","correctness_arm_b","correctness_arm_d","grader_notes",
 ]
 
 def get_sheets_client():
@@ -404,7 +404,7 @@ def log_to_sheets(export_data: dict):
 
         row = [
             datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            export_data.get("case_id",""),
+            st.session_state.get("case_id_str", export_data.get("case_id","")),
             patient_id,
             disease_code,
             export_data.get("clinical_layer","K1"),
@@ -438,6 +438,7 @@ def log_to_sheets(export_data: dict):
             str(oa_c.get("revision_type","") == "failed" or gem_c.get("revision_type","") == "failed"),
             arm_d.get("final_diagnosis", (arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_diagnosis","")),
             arm_d.get("confidence_label",""),
+            str(st.session_state.get("high_uncertainty_case", False)),
             "",  # ref_diagnosis — manuel
             "",  # correctness_arm_a — manuel
             "",  # correctness_arm_b — manuel
@@ -486,6 +487,8 @@ CRITIQUE_JSON_SCHEMA = {
 def ss_init():
     defaults = {
         "case_id": 1,
+        "patient_number": 1,
+        "case_id_str": "P001-M1-K0",
         "images": [],
         "final_report": "",
         "report_history": [],
@@ -513,6 +516,7 @@ def ss_init():
         "clinical_layer": "K0",
         "modality_set": "M1",
         "sheets_logged": None,
+        "high_uncertainty_case": False,
         # debate log — stores full transcript for research export
         "debate_log": None,
         # arm results for research comparison
@@ -534,12 +538,15 @@ def reset_case():
         "images", "final_report", "report_history", "agreement",
         "confidence_label", "confidence_icon", "chat_history",
         "last_error_type", "last_error_raw", "additional_clinical_note",
-        "additional_modality", "clinical", "clinical_layer", "modality_set", "sheets_logged", "debate_log",
+        "additional_modality", "clinical", "clinical_layer", "modality_set", "sheets_logged", "high_uncertainty_case", "debate_log",
         "arm_a_result", "arm_b_result", "arm_c_result", "arm_d_result",
     ]:
         st.session_state[k] = [] if k in ("images", "report_history", "chat_history") else None
     st.session_state.analysis_done = False
     st.session_state.uploader_key += 1
+    # Update case_id_str for new patient
+    _pid2 = f"P{st.session_state.patient_number:03d}"
+    st.session_state.case_id_str = f"{_pid2}-M1-K0"
     st.session_state.add_uploader_key += 1
     st.session_state.additional_modality = "OCT"
     st.session_state.confidence_label = ""
@@ -684,7 +691,7 @@ def call_openai_vision(clinical_text: str, images):
     content = [{
         "type": "text",
         "text": (
-            "You are an expert retina subspecialist. Carefully examine ALL provided retinal images "
+            "You are Specialist A, an expert retina subspecialist. Carefully examine ALL provided retinal images "
             "(which may include fundus photography, OCT, FAF, FA, OCTA, ICGA, or wide-field imaging) "
             "together with the clinical information.\n\n"
             "CRITICAL RULES:\n"
@@ -726,7 +733,7 @@ def call_openai_vision(clinical_text: str, images):
             nudge_content[0] = {
                 "type": "text",
                 "text": (
-                    "You are an expert retina subspecialist. You MUST provide a specific diagnosis.\n"
+                    "You are Specialist A, an expert retina subspecialist. You MUST provide a specific diagnosis.\n"
                     "Look carefully at the images. Describe what you see: any fluid, exudates, "
                     "hemorrhage, drusen, membrane, vascular changes, or structural abnormalities.\n"
                     "Based on these findings, provide your best clinical impression.\n\n"
@@ -752,7 +759,7 @@ def call_openai_vision(clinical_text: str, images):
 def call_gemini_vision(clinical_text: str, images, max_retries: int = 3):
     parts = [{
         "text": (
-            "You are a retina specialist. Analyze the provided retinal images and clinical info.\n"
+            "You are Specialist B, a retina specialist. Analyze the provided retinal images and clinical info.\n"
             "Return STRICT JSON ONLY matching this schema:\n"
             f"{json.dumps(VISION_JSON_SCHEMA, ensure_ascii=False)}\n\n"
             f"Clinical info:\n{clinical_text or '(none provided)'}"
@@ -796,9 +803,9 @@ def call_openai_critique(clinical_text: str, images, gemini_opinion: dict, oa_r1
     crit_content = [{
         "type": "text",
         "text": (
-            "You are an expert retina subspecialist conducting a structured peer review.\n"
-            "Re-examine ALL retinal images carefully, then evaluate your colleague's assessment.\n\n"
-            f"Colleague's assessment:\n{json.dumps(gemini_opinion, ensure_ascii=False, indent=2)}\n"
+            "You are Specialist A, an expert retina subspecialist conducting a structured peer review.\n"
+            "Re-examine ALL retinal images carefully, then evaluate the anonymous peer assessment below.\n\n"
+            f"Peer assessment (anonymous):\n{json.dumps(gemini_opinion, ensure_ascii=False, indent=2)}\n"
             f"{own_context}\n"
             "TASK:\n"
             "1. Look at the images again with fresh eyes.\n"
@@ -841,9 +848,9 @@ def call_gemini_critique(clinical_text: str, images, openai_opinion: dict, gem_r
     )
     parts = [{
         "text": (
-            "You are an expert retina subspecialist conducting a structured peer review.\n"
-            "Re-examine ALL retinal images carefully, then evaluate your colleague's assessment.\n\n"
-            f"Colleague's assessment:\n{json.dumps(openai_opinion, ensure_ascii=False, indent=2)}\n"
+            "You are Specialist B, an expert retina subspecialist conducting a structured peer review.\n"
+            "Re-examine ALL retinal images carefully, then evaluate the anonymous peer assessment below.\n\n"
+            f"Peer assessment (anonymous):\n{json.dumps(openai_opinion, ensure_ascii=False, indent=2)}\n"
             f"{own_context}\n"
             "TASK:\n"
             "1. Look at the images again with fresh eyes.\n"
@@ -906,7 +913,7 @@ def call_gemini_critique(clinical_text: str, images, openai_opinion: dict, gem_r
 # =========================
 def _revision_prompt(own_r1: dict, critique_received: dict, clinical_text: str) -> str:
     return (
-        "You are a retina specialist. Below is your original assessment (Round 1) "
+        "You are a retina subspecialist. Below is your original assessment (Round 1) "
         "and the peer critique you received (Round 2).\n\n"
         f"Your Round 1 assessment:\n{json.dumps(own_r1, ensure_ascii=False, indent=2)}\n\n"
         f"Peer critique:\n{json.dumps(critique_received, ensure_ascii=False, indent=2)}\n\n"
@@ -977,7 +984,7 @@ def build_final_report(clinical_text: str, debate_transcript: dict, is_update: b
 
     system = """
 You are RetinaGPT Arbiter, a retina subspecialty clinical reasoning assistant.
-You receive the FULL debate transcript between two AI retina specialists (3 rounds).
+You receive the FULL debate transcript between two anonymous AI retina specialists (Specialist A and Specialist B, 3 rounds).
 Generate ONE final educational report synthesizing the debate.
 
 FORMAT (Markdown)
@@ -987,6 +994,16 @@ FORMAT (Markdown)
 - Add confidence level (High / Moderate / Low)
 - State whether the two specialists reached consensus or maintained disagreement after debate
 - Brief justification referencing key debate arguments
+
+**Diagnostic agreement status**
+- State clearly: CONSENSUS / PARTIAL AGREEMENT / DISAGREEMENT
+- If DISAGREEMENT or PARTIAL AGREEMENT: describe the specific point of divergence
+- Example: "Specialist A favored DME; Specialist B favored CRVO — divergence on vascular etiology"
+
+**Uncertainty assessment**
+- Summarize overall diagnostic certainty
+- Note if any alternative diagnosis remains plausible after debate
+- Rate clinical uncertainty: LOW / MODERATE / HIGH
 
 **Key imaging findings**
 - Bullet list of the most relevant retinal imaging features discussed during debate
@@ -1009,11 +1026,17 @@ FORMAT (Markdown)
 - 2-3 sentences: what was agreed in Round 1, what was contested, how Round 3 resolved it
 - Note revision types: evidence-based revision, maintained position, or sycophantic change
 
+**⚠ Expert referral flag**
+- If DISAGREEMENT persists after Round 3 AND/OR uncertainty is HIGH: output exactly this line:
+  HIGH_UNCERTAINTY_CASE: true
+- If consensus reached AND uncertainty is LOW or MODERATE: output exactly this line:
+  HIGH_UNCERTAINTY_CASE: false
+
 STYLE
 - Retina subspecialty terminology
 - Concise but clinically meaningful
 - Morphology-first reasoning
-- Do NOT mention model names (GPT, Gemini etc.)
+- Do NOT mention model names (GPT, Gemini, Specialist A, Specialist B) in the clinical sections
 - If this is an updated assessment, explicitly note how new imaging changed the working diagnosis
 """
     try:
@@ -1025,7 +1048,15 @@ STYLE
             ],
             temperature=0,
         )
-        return resp.choices[0].message.content or ""
+        report_text = resp.choices[0].message.content or ""
+        # Parse expert review flag
+        flag_match = re.search(r'HIGH_UNCERTAINTY_CASE:[ \t]*(true|false)', report_text, re.IGNORECASE)
+        if flag_match:
+            st.session_state.high_uncertainty_case = flag_match.group(1).lower() == 'true'
+        else:
+            # Fallback: check agreement from debate transcript
+            st.session_state.high_uncertainty_case = False
+        return report_text
     except Exception as e:
         return f"Final report generation failed: {e}"
 
@@ -1304,12 +1335,46 @@ def render_debate_expander(debate_log: dict):
 # ── K0 Block ─────────────────────────────────────────────────────────────
 st.markdown('''<div class="rgpt-section">
 <div class="rgpt-section-title"><span></span>Clinical Information</div>
-<div style="background:#EBF5FB;border-left:3px solid #2471A3;border-radius:0 8px 8px 0;
-     padding:8px 12px;margin-bottom:14px;font-size:0.75rem;font-weight:600;
+''', unsafe_allow_html=True)
+
+# ── Case ID Generator ────────────────────────────────────────────────────
+if "patient_number" not in st.session_state:
+    st.session_state.patient_number = 1
+
+col_pid, col_cid = st.columns([1, 2])
+with col_pid:
+    patient_number = st.number_input(
+        "Hasta No (Patient #)",
+        min_value=1, max_value=9999,
+        value=st.session_state.patient_number,
+        step=1,
+        help="P001, P002... formatında hasta numarası"
+    )
+    st.session_state.patient_number = int(patient_number)
+
+# Auto-generate Case ID
+_pid  = f"P{st.session_state.patient_number:03d}"
+_mset = st.session_state.get("modality_set", "M1")
+_klay = st.session_state.get("clinical_layer", "K0")
+_auto_case_id = f"{_pid}-{_mset}-{_klay}"
+
+with col_cid:
+    st.markdown(
+        f'''<div style="margin-top:28px;padding:8px 14px;background:#1B4F72;
+        border-radius:8px;display:inline-block;">
+        <span style="color:#AED6F1;font-size:0.7rem;font-weight:600;letter-spacing:1px;">CASE ID</span><br>
+        <span style="color:#FFFFFF;font-size:1.1rem;font-weight:700;font-family:monospace;">{_auto_case_id}</span>
+        </div>''',
+        unsafe_allow_html=True
+    )
+
+st.session_state.case_id_str = _auto_case_id
+
+st.markdown('''<div style="background:#EBF5FB;border-left:3px solid #2471A3;border-radius:0 8px 8px 0;
+     padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
      letter-spacing:0.8px;text-transform:uppercase;color:#1A5276;">
   K0 — Temel Demografik
-</div>
-''', unsafe_allow_html=True)
+</div>''', unsafe_allow_html=True)
 
 col1, col2 = st.columns(2)
 with col1:
@@ -1580,6 +1645,26 @@ if st.session_state.report_history:
             st.markdown('<div class="rgpt-divider"></div>', unsafe_allow_html=True)
 
     st.markdown('<div class="rgpt-divider" style="margin-top:14px;"></div>', unsafe_allow_html=True)
+
+    # ── Expert review flag ───────────────────────────────────────────────
+    if st.session_state.get("high_uncertainty_case") is True:
+        st.markdown(
+            '''<div style="display:flex;align-items:center;gap:8px;padding:8px 14px;
+            border-radius:8px;background:#FEF9E7;border:1px solid #F39C12;margin-bottom:10px;">
+            <span style="font-size:1rem;">⚡</span>
+            <div>
+            <div style="font-weight:700;color:#7D6608;font-size:0.8rem;">YÜKSEK BELİRSİZLİK — debate_unresolved: TRUE</div>
+            <div style="color:#7D6608;font-size:0.75rem;">R3 sonrası tanısal uyumsuzluk devam ediyor veya güven düzeyi düşük.</div>
+            </div></div>''',
+            unsafe_allow_html=True
+        )
+    elif st.session_state.get("high_uncertainty_case") is False and st.session_state.get("analysis_done"):
+        st.markdown(
+            '''<div style="display:inline-flex;align-items:center;gap:6px;padding:4px 12px;
+            border-radius:999px;background:#D5F5E3;color:#1A7A4A;font-size:0.75rem;
+            font-weight:600;margin-bottom:10px;">✓ Tanısal konsensüs — debate_unresolved: FALSE</div>''',
+            unsafe_allow_html=True
+        )
 
     # Sheets status indicator
     if st.session_state.get("sheets_logged") is True:
