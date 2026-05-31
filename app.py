@@ -1331,13 +1331,11 @@ def render_debate_expander(debate_log: dict):
 # =========================
 # ── UI: Clinical input ──
 # =========================
-
-# ── K0 Block ─────────────────────────────────────────────────────────────
 st.markdown('''<div class="rgpt-section">
 <div class="rgpt-section-title"><span></span>Clinical Information</div>
 ''', unsafe_allow_html=True)
 
-# ── Case ID Generator ────────────────────────────────────────────────────
+# ── Hasta No + Case ID ───────────────────────────────────────────────────
 if "patient_number" not in st.session_state:
     st.session_state.patient_number = 1
 
@@ -1352,11 +1350,11 @@ with col_pid:
     )
     st.session_state.patient_number = int(patient_number)
 
-# Auto-generate Case ID
 _pid  = f"P{st.session_state.patient_number:03d}"
 _mset = st.session_state.get("modality_set", "M1")
 _klay = st.session_state.get("clinical_layer", "K0")
 _auto_case_id = f"{_pid}-{_mset}-{_klay}"
+st.session_state.case_id_str = _auto_case_id
 
 with col_cid:
     st.markdown(
@@ -1368,8 +1366,97 @@ with col_cid:
         unsafe_allow_html=True
     )
 
-st.session_state.case_id_str = _auto_case_id
+# ── K Sekmesi — Klinik Katman Seçici ─────────────────────────────────────
+st.markdown('''<div style="margin-top:16px;margin-bottom:6px;font-size:0.75rem;font-weight:600;
+  letter-spacing:0.8px;text-transform:uppercase;color:var(--text-muted,#6b7280);">
+  Klinik Bilgi Katmanı (K)
+</div>''', unsafe_allow_html=True)
 
+k_tab_cols = st.columns(4)
+k_labels = ["K0 — Temel Demografik","K1 — Klinik Bilgi","K2 — Sistemik Anamnez","K3 — Serbest Metin"]
+k_colors = ["#2471A3","#0E6655","#B7950B","#A93226"]
+k_bgs    = ["#EBF5FB","#D1F2EB","#FEF9E7","#FDEDEC"]
+k_texts  = ["#1A5276","#0B5345","#7D6608","#7B241C"]
+
+k_field_info = [
+    "✅ Yaş (zorunlu)  ✅ Cinsiyet (zorunlu)",
+    "✅ Yaş  ✅ Cinsiyet  ○ Lateralite  ○ Görme keskinliği  ○ Süre  ○ Primer semptom",
+    "K1 alanları  +  ○ Sistemik hastalıklar (DM, HT, miyopi...)",
+    "K2 alanları  +  ○ Serbest metin (travma, ilaç, aile öyküsü...)",
+]
+
+# Detect current k level for highlight
+_cur_k_num = {"K0":0,"K1":1,"K2":2,"K3":3}.get(_klay, 0)
+for ki, (kcol, klbl, kbg, ktxt) in enumerate(zip(k_tab_cols, k_labels, k_bgs, k_texts)):
+    with kcol:
+        is_active = (ki == _cur_k_num)
+        border = f"2px solid {k_colors[ki]}" if is_active else "0.5px solid #d1d5db"
+        st.markdown(
+            f'''<div style="background:{kbg if is_active else "#f9fafb"};border:{border};
+            border-radius:8px;padding:6px 8px;text-align:center;cursor:default;">
+            <div style="font-size:0.8rem;font-weight:700;color:{ktxt if is_active else "#6b7280"};">
+              {klbl.split("—")[0].strip()}
+            </div>
+            <div style="font-size:0.65rem;color:{ktxt if is_active else "#9ca3af"};margin-top:1px;">
+              {"—".join(klbl.split("—")[1:])}
+            </div></div>''',
+            unsafe_allow_html=True
+        )
+
+# K bilgi kutusu — aktif katmanın alanlarını göster
+st.markdown(
+    f'''<div style="background:{k_bgs[_cur_k_num]};border-left:3px solid {k_colors[_cur_k_num]};
+    border-radius:0 8px 8px 0;padding:8px 12px;margin:8px 0 14px 0;
+    font-size:0.78rem;color:{k_texts[_cur_k_num]};line-height:1.6;">
+    <strong>Doldurulacak alanlar:</strong> {k_field_info[_cur_k_num]}
+    </div>''',
+    unsafe_allow_html=True
+)
+
+# ── M Sekmesi — Modalite Seçici ───────────────────────────────────────────
+st.markdown('''<div style="margin-bottom:6px;font-size:0.75rem;font-weight:600;
+  letter-spacing:0.8px;text-transform:uppercase;color:var(--text-muted,#6b7280);">
+  Görüntü Modalite Seti (M)
+</div>''', unsafe_allow_html=True)
+
+m_tab_cols = st.columns(3)
+m_labels = ["M1 — Temel","M2 — Genişletilmiş","M3 — Kapsamlı"]
+m_bgs    = ["#EBF5FB","#D6EAF8","#AED6F1"]
+m_txts   = ["#1A5276","#154360","#1B4F72"]
+m_bords  = ["#2471A3","#1A5276","#1B4F72"]
+m_field_info = [
+    "✅ OCT  ✅ Renkli Fundus  — her vakada zorunlu temel set",
+    "✅ OCT  ✅ Renkli Fundus  ○ + 1 ek modalite (FA / FAF / OCTA / ICGA) — hastalık grubuna göre seç",
+    "✅ OCT  ✅ Renkli Fundus  ○ + 2 veya daha fazla ek modalite — mevcut tüm görüntüler",
+]
+
+_cur_m_num = {"M1":0,"M2":1,"M3":2}.get(_mset, 0)
+for mi, (mcol, mlbl, mbg, mtxt, mbrd) in enumerate(zip(m_tab_cols, m_labels, m_bgs, m_txts, m_bords)):
+    with mcol:
+        is_active = (mi == _cur_m_num)
+        border = f"2px solid {mbrd}" if is_active else "0.5px solid #d1d5db"
+        st.markdown(
+            f'''<div style="background:{mbg if is_active else "#f9fafb"};border:{border};
+            border-radius:8px;padding:6px 8px;text-align:center;">
+            <div style="font-size:0.8rem;font-weight:700;color:{mtxt if is_active else "#6b7280"};">
+              {mlbl.split("—")[0].strip()}
+            </div>
+            <div style="font-size:0.65rem;color:{mtxt if is_active else "#9ca3af"};margin-top:1px;">
+              {"—".join(mlbl.split("—")[1:])}
+            </div></div>''',
+            unsafe_allow_html=True
+        )
+
+st.markdown(
+    f'''<div style="background:{m_bgs[_cur_m_num]};border-left:3px solid {m_bords[_cur_m_num]};
+    border-radius:0 8px 8px 0;padding:8px 12px;margin:8px 0 14px 0;
+    font-size:0.78rem;color:{m_txts[_cur_m_num]};line-height:1.6;">
+    <strong>Yüklenecek görüntüler:</strong> {m_field_info[_cur_m_num]}
+    </div>''',
+    unsafe_allow_html=True
+)
+
+# ── K0 Block ─────────────────────────────────────────────────────────────
 st.markdown('''<div style="background:#EBF5FB;border-left:3px solid #2471A3;border-radius:0 8px 8px 0;
      padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
      letter-spacing:0.8px;text-transform:uppercase;color:#1A5276;">
