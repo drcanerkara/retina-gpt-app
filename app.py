@@ -489,6 +489,8 @@ def ss_init():
         "case_id": 1,
         "patient_number": 1,
         "case_id_str": "P001-M1-K0",
+        "manual_k": "K0",
+        "manual_m": "M1",
         "images": [],
         "final_report": "",
         "report_history": [],
@@ -538,7 +540,7 @@ def reset_case():
         "images", "final_report", "report_history", "agreement",
         "confidence_label", "confidence_icon", "chat_history",
         "last_error_type", "last_error_raw", "additional_clinical_note",
-        "additional_modality", "clinical", "clinical_layer", "modality_set", "sheets_logged", "high_uncertainty_case", "debate_log",
+        "additional_modality", "clinical", "clinical_layer", "modality_set", "sheets_logged", "high_uncertainty_case", "manual_k", "manual_m", "debate_log",
         "arm_a_result", "arm_b_result", "arm_c_result", "arm_d_result",
     ]:
         st.session_state[k] = [] if k in ("images", "report_history", "chat_history") else None
@@ -1366,95 +1368,72 @@ with col_cid:
         unsafe_allow_html=True
     )
 
-# ── K Sekmesi — Klinik Katman Seçici ─────────────────────────────────────
-st.markdown('''<div style="margin-top:16px;margin-bottom:6px;font-size:0.75rem;font-weight:600;
-  letter-spacing:0.8px;text-transform:uppercase;color:var(--text-muted,#6b7280);">
-  Klinik Bilgi Katmanı (K)
-</div>''', unsafe_allow_html=True)
+# ── K Seçici — radio butonlar ────────────────────────────────────────────
+k_opts = ["K0 — Temel Demografik","K1 — Klinik Bilgi","K2 — Sistemik Anamnez","K3 — Serbest Metin"]
+k_default = {"K0":0,"K1":1,"K2":2,"K3":3}.get(st.session_state.get("manual_k","K0"), 0)
+k_choice = st.radio(
+    "Klinik Bilgi Katmanı (K)",
+    k_opts,
+    index=k_default,
+    horizontal=True,
+    key="k_radio",
+    help="Bu vakada hangi klinik bilgi katmanını dolduracaksınız?"
+)
+st.session_state.manual_k = k_choice.split("—")[0].strip()
 
-k_tab_cols = st.columns(4)
-k_labels = ["K0 — Temel Demografik","K1 — Klinik Bilgi","K2 — Sistemik Anamnez","K3 — Serbest Metin"]
-k_colors = ["#2471A3","#0E6655","#B7950B","#A93226"]
-k_bgs    = ["#EBF5FB","#D1F2EB","#FEF9E7","#FDEDEC"]
-k_texts  = ["#1A5276","#0B5345","#7D6608","#7B241C"]
-
-k_field_info = [
-    "✅ Yaş (zorunlu)  ✅ Cinsiyet (zorunlu)",
-    "✅ Yaş  ✅ Cinsiyet  ○ Lateralite  ○ Görme keskinliği  ○ Süre  ○ Primer semptom",
-    "K1 alanları  +  ○ Sistemik hastalıklar (DM, HT, miyopi...)",
-    "K2 alanları  +  ○ Serbest metin (travma, ilaç, aile öyküsü...)",
-]
-
-# Detect current k level for highlight
-_cur_k_num = {"K0":0,"K1":1,"K2":2,"K3":3}.get(_klay, 0)
-for ki, (kcol, klbl, kbg, ktxt) in enumerate(zip(k_tab_cols, k_labels, k_bgs, k_texts)):
-    with kcol:
-        is_active = (ki == _cur_k_num)
-        border = f"2px solid {k_colors[ki]}" if is_active else "0.5px solid #d1d5db"
-        st.markdown(
-            f'''<div style="background:{kbg if is_active else "#f9fafb"};border:{border};
-            border-radius:8px;padding:6px 8px;text-align:center;cursor:default;">
-            <div style="font-size:0.8rem;font-weight:700;color:{ktxt if is_active else "#6b7280"};">
-              {klbl.split("—")[0].strip()}
-            </div>
-            <div style="font-size:0.65rem;color:{ktxt if is_active else "#9ca3af"};margin-top:1px;">
-              {"—".join(klbl.split("—")[1:])}
-            </div></div>''',
-            unsafe_allow_html=True
-        )
-
-# K bilgi kutusu — aktif katmanın alanlarını göster
+# K bilgi kutusu
+k_bgs   = {"K0":"#EBF5FB","K1":"#D1F2EB","K2":"#FEF9E7","K3":"#FDEDEC"}
+k_bords = {"K0":"#2471A3","K1":"#0E6655","K2":"#B7950B","K3":"#A93226"}
+k_texts = {"K0":"#1A5276","K1":"#0B5345","K2":"#7D6608","K3":"#7B241C"}
+k_field_info = {
+    "K0": "✅ Yaş (zorunlu)   ✅ Cinsiyet (zorunlu)   — başka hiçbir alan doldurulmasın",
+    "K1": "✅ Yaş   ✅ Cinsiyet   ○ Lateralite   ○ Görme keskinliği   ○ Süre   ○ Primer semptom",
+    "K2": "K1 alanları   +   ○ Sistemik hastalıklar (DM, HT, miyopi, tiroid...)",
+    "K3": "K2 alanları   +   ○ Serbest metin (travma, ilaç, aile öyküsü, cerrahi öykü...)",
+}
+_sel_k = st.session_state.manual_k
 st.markdown(
-    f'''<div style="background:{k_bgs[_cur_k_num]};border-left:3px solid {k_colors[_cur_k_num]};
-    border-radius:0 8px 8px 0;padding:8px 12px;margin:8px 0 14px 0;
-    font-size:0.78rem;color:{k_texts[_cur_k_num]};line-height:1.6;">
-    <strong>Doldurulacak alanlar:</strong> {k_field_info[_cur_k_num]}
+    f'''<div style="background:{k_bgs[_sel_k]};border-left:3px solid {k_bords[_sel_k]};
+    border-radius:0 8px 8px 0;padding:8px 12px;margin:4px 0 14px 0;
+    font-size:0.78rem;color:{k_texts[_sel_k]};line-height:1.7;">
+    <strong>Doldurulacak alanlar:</strong>&nbsp; {k_field_info[_sel_k]}
     </div>''',
     unsafe_allow_html=True
 )
 
-# ── M Sekmesi — Modalite Seçici ───────────────────────────────────────────
-st.markdown('''<div style="margin-bottom:6px;font-size:0.75rem;font-weight:600;
-  letter-spacing:0.8px;text-transform:uppercase;color:var(--text-muted,#6b7280);">
-  Görüntü Modalite Seti (M)
-</div>''', unsafe_allow_html=True)
+# ── M Seçici — radio butonlar ─────────────────────────────────────────────
+m_opts = ["M1 — Temel","M2 — Genişletilmiş","M3 — Kapsamlı"]
+m_default = {"M1":0,"M2":1,"M3":2}.get(st.session_state.get("manual_m","M1"), 0)
+m_choice = st.radio(
+    "Görüntü Modalite Seti (M)",
+    m_opts,
+    index=m_default,
+    horizontal=True,
+    key="m_radio",
+    help="Bu vakada kaç modalite yükleyeceksiniz?"
+)
+st.session_state.manual_m = m_choice.split("—")[0].strip()
 
-m_tab_cols = st.columns(3)
-m_labels = ["M1 — Temel","M2 — Genişletilmiş","M3 — Kapsamlı"]
-m_bgs    = ["#EBF5FB","#D6EAF8","#AED6F1"]
-m_txts   = ["#1A5276","#154360","#1B4F72"]
-m_bords  = ["#2471A3","#1A5276","#1B4F72"]
-m_field_info = [
-    "✅ OCT  ✅ Renkli Fundus  — her vakada zorunlu temel set",
-    "✅ OCT  ✅ Renkli Fundus  ○ + 1 ek modalite (FA / FAF / OCTA / ICGA) — hastalık grubuna göre seç",
-    "✅ OCT  ✅ Renkli Fundus  ○ + 2 veya daha fazla ek modalite — mevcut tüm görüntüler",
-]
-
-_cur_m_num = {"M1":0,"M2":1,"M3":2}.get(_mset, 0)
-for mi, (mcol, mlbl, mbg, mtxt, mbrd) in enumerate(zip(m_tab_cols, m_labels, m_bgs, m_txts, m_bords)):
-    with mcol:
-        is_active = (mi == _cur_m_num)
-        border = f"2px solid {mbrd}" if is_active else "0.5px solid #d1d5db"
-        st.markdown(
-            f'''<div style="background:{mbg if is_active else "#f9fafb"};border:{border};
-            border-radius:8px;padding:6px 8px;text-align:center;">
-            <div style="font-size:0.8rem;font-weight:700;color:{mtxt if is_active else "#6b7280"};">
-              {mlbl.split("—")[0].strip()}
-            </div>
-            <div style="font-size:0.65rem;color:{mtxt if is_active else "#9ca3af"};margin-top:1px;">
-              {"—".join(mlbl.split("—")[1:])}
-            </div></div>''',
-            unsafe_allow_html=True
-        )
-
+m_bgs_r   = {"M1":"#EBF5FB","M2":"#D6EAF8","M3":"#AED6F1"}
+m_bords_r = {"M1":"#2471A3","M2":"#1A5276","M3":"#1B4F72"}
+m_texts_r = {"M1":"#1A5276","M2":"#154360","M3":"#1B4F72"}
+m_field_info = {
+    "M1": "✅ OCT   ✅ Renkli Fundus   — her vakada zorunlu temel set",
+    "M2": "✅ OCT   ✅ Renkli Fundus   + 1 ek modalite (FA / FAF / OCTA / ICGA) — hastalık grubuna göre seç",
+    "M3": "✅ OCT   ✅ Renkli Fundus   + 2 veya daha fazla ek modalite — mevcut tüm görüntüler",
+}
+_sel_m = st.session_state.manual_m
 st.markdown(
-    f'''<div style="background:{m_bgs[_cur_m_num]};border-left:3px solid {m_bords[_cur_m_num]};
-    border-radius:0 8px 8px 0;padding:8px 12px;margin:8px 0 14px 0;
-    font-size:0.78rem;color:{m_txts[_cur_m_num]};line-height:1.6;">
-    <strong>Yüklenecek görüntüler:</strong> {m_field_info[_cur_m_num]}
+    f'''<div style="background:{m_bgs_r[_sel_m]};border-left:3px solid {m_bords_r[_sel_m]};
+    border-radius:0 8px 8px 0;padding:8px 12px;margin:4px 0 14px 0;
+    font-size:0.78rem;color:{m_texts_r[_sel_m]};line-height:1.7;">
+    <strong>Yüklenecek görüntüler:</strong>&nbsp; {m_field_info[_sel_m]}
     </div>''',
     unsafe_allow_html=True
 )
+
+# Manuel seçimleri modality_set olarak kaydet (case ID'ye yansısın)
+st.session_state.modality_set = st.session_state.manual_m
 
 # ── K0 Block ─────────────────────────────────────────────────────────────
 st.markdown('''<div style="background:#EBF5FB;border-left:3px solid #2471A3;border-radius:0 8px 8px 0;
