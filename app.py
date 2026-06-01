@@ -327,6 +327,8 @@ SHEETS_COLUMNS = [
     "agreed_r1","agreed_r3","debate_changed",
     "oa_revision_type","gem_revision_type","critique_failed",
     "final_diagnosis","final_confidence",
+    "openai_model_used","openai_fingerprint","prompt_version","analysis_language",
+    "temperature_openai","temperature_gemini","seed_openai",
     "high_uncertainty_case","ref_diagnosis","correctness_arm_a","correctness_arm_b","correctness_arm_d","grader_notes",
 ]
 
@@ -444,6 +446,13 @@ def log_to_sheets(export_data: dict):
             str(oa_c.get("revision_type","") == "failed" or gem_c.get("revision_type","") == "failed"),
             arm_d.get("final_diagnosis", (arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_diagnosis","")),
             arm_d.get("confidence_label",""),
+            st.session_state.get("openai_model_used", OPENAI_VISION_MODEL),
+            st.session_state.get("openai_fingerprint", ""),
+            PROMPT_VERSION,
+            ANALYSIS_LANGUAGE,
+            str(TEMPERATURE_OPENAI),
+            str(TEMPERATURE_GEMINI),
+            str(SEED_OPENAI),
             str(st.session_state.get("high_uncertainty_case", False)),
             "",  # ref_diagnosis — manuel
             "",  # correctness_arm_a — manuel
@@ -465,6 +474,13 @@ def log_to_sheets(export_data: dict):
 OPENAI_VISION_MODEL  = "gpt-4o"
 OPENAI_ARBITER_MODEL = "gpt-4o-mini"
 GEMINI_VISION_MODEL  = "gemini-2.5-flash"
+
+# ── Research reproducibility metadata ────────────────────────────────────
+PROMPT_VERSION       = "v1.2"   # increment when any prompt changes
+ANALYSIS_LANGUAGE    = "en"     # prompts and outputs are in English
+TEMPERATURE_OPENAI   = 0        # deterministic
+TEMPERATURE_GEMINI   = 0.0      # deterministic
+SEED_OPENAI          = 42       # fixed seed for reproducibility
 
 
 # =========================
@@ -529,6 +545,9 @@ def ss_init():
         "modality_set": "M1",
         "sheets_logged": None,
         "high_uncertainty_case": False,
+        "openai_model_used": "",
+        "openai_fingerprint": "",
+        "prompt_version": PROMPT_VERSION,
         # debate log — stores full transcript for research export
         "debate_log": None,
         # arm results for research comparison
@@ -707,10 +726,10 @@ def build_clinical_summary():
     elif isinstance(sys_list, str) and sys_list:
         lines.append(f"Systemic diseases: {sys_list}")
     for label, key in [
-        ("Oküler öykü", "ocular_history"),
-        ("Kullandığı ilaçlar", "medications"),
-        ("Aile öyküsü", "family_history"),
-        ("Ek notlar", "additional_notes"),
+        ("Ocular history", "ocular_history"),
+        ("Medications", "medications"),
+        ("Family history", "family_history"),
+        ("Additional notes", "additional_notes"),
     ]:
         val = (st.session_state.get(key) or "").strip()
         if val: lines.append(f"{label}: {val}")
@@ -749,11 +768,14 @@ def call_openai_vision(clinical_text: str, images):
         resp = openai_client.chat.completions.create(
             model=OPENAI_VISION_MODEL,
             messages=[{"role": "user", "content": content}],
-            temperature=0,
-            seed=42,
+            temperature=TEMPERATURE_OPENAI,
+            seed=SEED_OPENAI,
             max_tokens=1000,
         )
         raw = resp.choices[0].message.content or ""
+        # Store model metadata for research reproducibility
+        st.session_state.openai_model_used = resp.model
+        st.session_state.openai_fingerprint = getattr(resp, "system_fingerprint", "")
         parsed = safe_json_extract(raw)
         # Clean up: remove top_diagnosis from differentials if present
         if parsed and parsed.get("top_differentials"):
@@ -808,6 +830,7 @@ def call_gemini_vision(clinical_text: str, images, max_retries: int = 3):
         try:
             resp = gemini_client.models.generate_content(
                 model=GEMINI_VISION_MODEL,
+                config={"temperature": TEMPERATURE_GEMINI},
                 contents=[{"role": "user", "parts": parts}],
                 config={"temperature": 0, "response_mime_type": "application/json"},
             )
@@ -912,6 +935,7 @@ def call_gemini_critique(clinical_text: str, images, openai_opinion: dict, gem_r
         try:
             resp = gemini_client.models.generate_content(
                 model=GEMINI_VISION_MODEL,
+                config={"temperature": TEMPERATURE_GEMINI},
                 contents=[{"role": "user", "parts": parts}],
                 config={"temperature": 0, "response_mime_type": "application/json"},
             )
@@ -969,11 +993,14 @@ def call_openai_revision(clinical_text: str, images, oa_r1: dict, gem_critique: 
         resp = openai_client.chat.completions.create(
             model=OPENAI_VISION_MODEL,
             messages=[{"role": "user", "content": content}],
-            temperature=0,
-            seed=42,
+            temperature=TEMPERATURE_OPENAI,
+            seed=SEED_OPENAI,
             max_tokens=1000,
         )
         raw = resp.choices[0].message.content or ""
+        # Store model metadata for research reproducibility
+        st.session_state.openai_model_used = resp.model
+        st.session_state.openai_fingerprint = getattr(resp, "system_fingerprint", "")
         return raw, safe_json_extract(raw)
     except Exception as e:
         return f"OpenAI revision error: {e}", None
@@ -989,6 +1016,7 @@ def call_gemini_revision(clinical_text: str, images, gem_r1: dict, oa_critique: 
         try:
             resp = gemini_client.models.generate_content(
                 model=GEMINI_VISION_MODEL,
+                config={"temperature": TEMPERATURE_GEMINI},
                 contents=[{"role": "user", "parts": parts}],
                 config={"temperature": 0, "response_mime_type": "application/json"},
             )
@@ -1377,7 +1405,7 @@ if "patient_number" not in st.session_state:
 col_pid, col_cid = st.columns([1, 2])
 with col_pid:
     patient_number = st.number_input(
-        "Hasta No (Patient #)",
+        "Patient # ",
         min_value=1, max_value=9999,
         value=st.session_state.patient_number,
         step=1,
@@ -1402,10 +1430,10 @@ with col_cid:
     )
 
 # ── K Seçici — radio butonlar ────────────────────────────────────────────
-k_opts = ["K0 — Sadece görüntü","K1 — Temel klinik","K2 — Klinik bulgular","K3 — Tam anamnez"]
+k_opts = ["K0 — Image only","K1 — Basic clinical","K2 — Clinical findings","K3 — Full history"]
 k_default = {"K0":0,"K1":1,"K2":2,"K3":3}.get(st.session_state.get("manual_k","K0"), 0)
 k_choice = st.radio(
-    "Klinik Bilgi Katmanı (K)",
+    "Clinical Knowledge Layer (K)",
     k_opts,
     index=k_default,
     horizontal=True,
@@ -1419,10 +1447,10 @@ k_bgs   = {"K0":"#EBF5FB","K1":"#D1F2EB","K2":"#FEF9E7","K3":"#FDEDEC"}
 k_bords = {"K0":"#2471A3","K1":"#0E6655","K2":"#B7950B","K3":"#A93226"}
 k_texts = {"K0":"#1A5276","K1":"#0B5345","K2":"#7D6608","K3":"#7B241C"}
 k_field_info = {
-    "K0": "Klinik bilgi girilmez — sadece görüntü yüklenir",
-    "K1": "✅ Yaş   ✅ Cinsiyet   ✅ Analiz edilen göz (OD/OS)",
-    "K2": "K1   +   ○ Görme keskinliği   ○ Semptom(lar)   ○ Süre   ○ Tutulum paterni (uni/bilateral)",
-    "K3": "K2   +   ○ Sistemik hastalıklar   ○ Oküler öykü   ○ İlaçlar   ○ Aile öyküsü   ○ Notlar",
+    "K0": "No clinical data — images only",
+    "K1": "✅ Age   ✅ Sex   ✅ Analyzed eye (OD/OS)",
+    "K2": "K1   +   ○ Visual acuity   ○ Symptom(s)   ○ Duration   ○ Involvement pattern",
+    "K3": "K2   +   ○ Systemic diseases   ○ Ocular history   ○ Medications   ○ Family history   ○ Notes",
 }
 _sel_k = st.session_state.manual_k
 st.markdown(
@@ -1435,10 +1463,10 @@ st.markdown(
 )
 
 # ── M Seçici — radio butonlar ─────────────────────────────────────────────
-m_opts = ["M1 — Temel","M2 — Genişletilmiş","M3 — Kapsamlı"]
+m_opts = ["M1 — Fundus only","M2 — Fundus + critical test","M3 — Fundus + 2 tests"]
 m_default = {"M1":0,"M2":1,"M3":2}.get(st.session_state.get("manual_m","M1"), 0)
 m_choice = st.radio(
-    "Görüntü Modalite Seti (M)",
+    "Imaging Modality Set (M)",
     m_opts,
     index=m_default,
     horizontal=True,
@@ -1451,9 +1479,9 @@ m_bgs_r   = {"M1":"#EBF5FB","M2":"#D6EAF8","M3":"#AED6F1"}
 m_bords_r = {"M1":"#2471A3","M2":"#1A5276","M3":"#1B4F72"}
 m_texts_r = {"M1":"#1A5276","M2":"#154360","M3":"#1B4F72"}
 m_field_info = {
-    "M1": "✅ Renkli Fundus   — tek modalite, her vakada zorunlu temel set",
-    "M2": "✅ Renkli Fundus   + hastalık grubuna özgü EN KRİTİK 1 test (bkz. hastalık listesi)",
-    "M3": "✅ Renkli Fundus   + M2'deki test   + İKİNCİ tamamlayıcı test (bkz. hastalık listesi)",
+    "M1": "✅ Color Fundus   — single modality, mandatory for all cases",
+    "M2": "✅ Color Fundus   + disease-specific MOST CRITICAL test (see disease list)",
+    "M3": "✅ Color Fundus   + M2 test   + SECOND complementary test (see disease list)",
 }
 _sel_m = st.session_state.manual_m
 st.markdown(
@@ -1472,139 +1500,135 @@ st.session_state.modality_set = st.session_state.manual_m
 st.markdown('''<div style="background:#EBF5FB;border-left:3px solid #2471A3;border-radius:0 8px 8px 0;
      padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
      letter-spacing:0.8px;text-transform:uppercase;color:#1A5276;">
-  K0 — Sadece Görüntü (klinik bilgi girilmez)
+  K0 — Image Only (no clinical data)
 </div>''', unsafe_allow_html=True)
 
 st.markdown('''<div style="font-size:0.78rem;color:#5D6D7E;padding:4px 0 8px 0;">
-  K0 koşulunda hiçbir klinik bilgi girilmez. Yalnızca görüntü yüklenir ve analiz başlatılır.
+  In K0 condition, no clinical data is entered. Only images are uploaded and analysis is initiated.
 </div>''', unsafe_allow_html=True)
 
 # ── K1 Block ─────────────────────────────────────────────────────────────
 st.markdown('''<div style="background:#D1F2EB;border-left:3px solid #0E6655;border-radius:0 8px 8px 0;
      padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
      letter-spacing:0.8px;text-transform:uppercase;color:#0B5345;">
-  K1 — Temel Klinik (Yaş + Cinsiyet + Analiz Edilen Göz)
+  K1 — Basic Clinical (Age + Sex + Analyzed Eye)
 </div>''', unsafe_allow_html=True)
 
 col1, col2 = st.columns(2)
 with col1:
-    age = st.number_input("Yaş *", min_value=0, max_value=120,
+    age = st.number_input("Age *", min_value=0, max_value=120,
                           value=st.session_state.age or 0, step=1)
 with col2:
-    sex_opts = ["Seçiniz", "Erkek", "Kadın", "Diğer"]
-    sex_map  = {"Select":"Seçiniz","Male":"Erkek","Female":"Kadın","Other":"Diğer",
-                "Seçiniz":"Seçiniz","Erkek":"Erkek","Kadın":"Kadın","Diğer":"Diğer"}
-    cur_sex  = sex_map.get(st.session_state.sex, "Seçiniz")
-    sex = st.selectbox("Cinsiyet *", sex_opts,
+    sex_opts = ["Select", "Male", "Female", "Other"]
+    sex_map  = {"Select":"Select","Male":"Male","Female":"Female","Other":"Other"}
+    cur_sex  = sex_map.get(st.session_state.sex, "Select")
+    sex = st.selectbox("Sex *", sex_opts,
                        index=sex_opts.index(cur_sex if cur_sex in sex_opts else "Seçiniz"))
 
-lat_opts = ["Seçiniz", "OD (Sağ göz)", "OS (Sol göz)"]
-lat_map  = {"Select":"Seçiniz","OD (Right)":"OD (Sağ göz)","OS (Left)":"OS (Sol göz)",
-            "Seçiniz":"Seçiniz","OD (Sağ göz)":"OD (Sağ göz)","OS (Sol göz)":"OS (Sol göz)"}
-cur_lat  = lat_map.get(st.session_state.laterality, "Seçiniz")
-laterality = st.selectbox("Analiz edilen göz *", lat_opts,
-                           index=lat_opts.index(cur_lat if cur_lat in lat_opts else "Seçiniz"),
-                           help="Hangi gözün görüntüsü analiz ediliyor?")
+lat_opts = ["Select", "OD (Right)", "OS (Left)"]
+lat_map  = {"Select":"Select","OD (Right)":"OD (Right)","OS (Left)":"OS (Left)"}
+cur_lat  = lat_map.get(st.session_state.laterality, "Select")
+laterality = st.selectbox("Analyzed eye *", lat_opts,
+                           index=lat_opts.index(cur_lat if cur_lat in lat_opts else "Select"),
+                           help="Which eye's images are being analyzed?")
 
 # ── K2 Block ─────────────────────────────────────────────────────────────
 st.markdown('''<div style="background:#FEF9E7;border-left:3px solid #B7950B;border-radius:0 8px 8px 0;
      padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
      letter-spacing:0.8px;text-transform:uppercase;color:#7D6608;">
-  K2 — Klinik Bulgular (Görme Keskinliği + Semptom + Süre + Tutulum)
+  K2 — Clinical Findings (VA + Symptoms + Duration + Involvement)
 </div>''', unsafe_allow_html=True)
 
 col_va, col_dur = st.columns(2)
 with col_va:
     visual_acuity = st.text_input(
-        "Görme keskinliği (Snellen) *",
+        "Visual acuity (Snellen)",
         value=st.session_state.get("visual_acuity",""),
-        placeholder="ör: 1.0 / 0.8 / 0.5 / 0.1 / PS / EH / IH",
-        help="Ham Snellen değeri: 1.0, 0.8, 0.5, 0.1 — PS: parmak sayar, EH: el hareketi, IH: ışık hissi"
+        placeholder="e.g. 1.0 / 0.8 / 0.5 / 0.1 / CF / HM / LP",
+        help="Raw Snellen: 1.0, 0.8, 0.5, 0.1 — CF: counting fingers, HM: hand motion, LP: light perception"
     )
 with col_dur:
     duration = st.text_input(
-        "Süre / Başlangıç",
+        "Duration / Onset",
         value=st.session_state.get("duration",""),
-        placeholder="ör: 3 gün / 2 hafta / 6 ay / kronik / ani",
-        help="Semptomun ne zaman başladığı veya ne kadar süredir devam ettiği"
+        placeholder="e.g. 3 days / 2 weeks / 6 months / chronic",
+        help="When symptoms started or how long they have persisted"
     )
 
-symp_all = ["Görme azalması","Metamorfopsi","Skotom","Fotopsi",
-            "Floaters / uçuşan cisim","Gece körlüğü",
-            "Renk görme bozukluğu","Periferik görme kaybı",
-            "Asemptomatik","Diğer"]
+symp_all = ["Visual loss","Metamorphopsia","Scotoma","Photopsia",
+            "Floaters","Nyctalopia (night blindness)",
+            "Dyschromatopsia","Peripheral visual loss",
+            "Asymptomatic","Other"]
 cur_symp = st.session_state.get("primary_symptom",[])
 if isinstance(cur_symp, str): cur_symp = [cur_symp] if cur_symp else []
 primary_symptom = st.multiselect(
-    "Primer semptom(lar)",
+    "Primary symptom(s)",
     options=symp_all,
     default=[s for s in cur_symp if s in symp_all],
-    help="Birden fazla semptom seçilebilir"
+    help="Multiple symptoms can be selected"
 )
 
-inv_opts = ["Seçiniz","Unilateal (tek göz)","Bilateral (iki göz)","Bilinmiyor"]
+inv_opts = ["Select","Unilateral","Bilateral","Unknown"]
 cur_inv = st.session_state.get("involvement","Select")
-if cur_inv not in inv_opts: cur_inv = "Seçiniz"
+if cur_inv not in inv_opts: cur_inv = "Select"
 involvement = st.selectbox(
-    "Tutulum paterni",
+    "Involvement pattern",
     inv_opts,
-    index=inv_opts.index(cur_inv if cur_inv in inv_opts else "Seçiniz"),
-    help="Hastalık tek gözde mi iki gözde mi?"
+    index=inv_opts.index(cur_inv if cur_inv in inv_opts else "Select"),
+    help="Is the disease unilateral or bilateral?"
 )
 
 # ── K3 Block ─────────────────────────────────────────────────────────────
 st.markdown('''<div style="background:#FDEDEC;border-left:3px solid #A93226;border-radius:0 8px 8px 0;
      padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
      letter-spacing:0.8px;text-transform:uppercase;color:#7B241C;">
-  K3 — Tam Anamnez (Sistemik Hastalık + Öykü + İlaç + Aile + Notlar)
+  K3 — Full History (Systemic + Ocular + Medications + Family + Notes)
 </div>''', unsafe_allow_html=True)
 
-sys_all = ["Diabetes mellitus","Hipertansiyon","Otoimmün hastalık",
-           "Malignite öyküsü","Tiroid hastalığı","Yüksek miyopi",
-           "Sigara kullanımı","Gebelik","Yok","Diğer"]
+sys_all = ["Diabetes mellitus","Hypertension","Autoimmune disease",
+           "Malignancy history","Thyroid disease","High myopia",
+           "Smoking","Pregnancy","None","Other"]
 cur_sys = st.session_state.get("systemic_diseases",[])
 if isinstance(cur_sys, str): cur_sys = [cur_sys] if cur_sys else []
 systemic_diseases = st.multiselect(
-    "Sistemik hastalıklar",
+    "Systemic diseases",
     options=sys_all,
     default=[s for s in cur_sys if s in sys_all],
-    help="Birden fazla sistemik hastalık seçilebilir"
+    help="Multiple systemic diseases can be selected"
 )
 
 col_k3a, col_k3b = st.columns(2)
 with col_k3a:
     ocular_history = st.text_input(
-        "Oküler öykü",
+        "Ocular history",
         value=st.session_state.get("ocular_history",""),
-        placeholder="ör: lazer, anti-VEGF enjeksiyonu, vitrektomi, katarakt op..."
+        placeholder="e.g. laser, anti-VEGF injection, vitrectomy, cataract surgery..."
     )
     family_history = st.text_input(
-        "Aile öyküsü",
+        "Family history",
         value=st.session_state.get("family_history",""),
-        placeholder="ör: ailede AMD, RP, glokom, DM..."
+        placeholder="e.g. family history of AMD, RP, glaucoma, DM..."
     )
 with col_k3b:
     medications = st.text_input(
-        "Kullandığı ilaçlar",
+        "Medications",
         value=st.session_state.get("medications",""),
-        placeholder="ör: metformin, warfarin, klorokin, kortikosteroid..."
+        placeholder="e.g. metformin, warfarin, chloroquine, corticosteroids..."
     )
     additional_notes = st.text_input(
         "Additional notes",
         value=st.session_state.get("additional_notes",""),
-        placeholder="travma öyküsü, gebelik haftası, sistemik tedavi, diğer..."
+        placeholder="trauma history, gestational week, systemic treatment, other..."
     )
 
 # ── Update session state ──────────────────────────────────────────────────
 st.session_state.age                = int(age)
-sex_reverse = {"Erkek":"Male","Kadın":"Female","Diğer":"Other","Seçiniz":"Select"}
-st.session_state.sex = sex_reverse.get(sex, sex)
-lat_reverse = {"OD (Sağ göz)":"OD (Right)","OS (Sol göz)":"OS (Left)","Seçiniz":""}
-st.session_state.laterality = lat_reverse.get(laterality, laterality if laterality != "Seçiniz" else "")
+st.session_state.sex = sex
+st.session_state.laterality = laterality if laterality != "Select" else ""
 st.session_state.visual_acuity      = visual_acuity or ""
 st.session_state.primary_symptom    = primary_symptom
 st.session_state.duration           = duration or ""
-st.session_state.involvement        = involvement if involvement != "Seçiniz" else ""
+st.session_state.involvement        = involvement if involvement != "Select" else ""
 st.session_state.systemic_diseases  = systemic_diseases
 st.session_state.ocular_history     = ocular_history or ""
 st.session_state.medications        = medications or ""
@@ -1624,7 +1648,7 @@ def detect_clinical_layer():
         bool((st.session_state.get("visual_acuity") or "").strip()),
         bool(st.session_state.get("primary_symptom",[])),
         bool((st.session_state.get("duration") or "").strip()),
-        st.session_state.get("involvement","") not in ("","Select","Seçiniz"),
+        st.session_state.get("involvement","") not in ("","Select"),
     ])
     k1 = st.session_state.laterality not in ("", "Select")
     if k3: return "K3"
@@ -1642,7 +1666,7 @@ st.markdown(
     f'<div style="margin-top:8px;display:inline-block;padding:4px 12px;'
     f'border-radius:999px;background:{layer_colors[cur_layer]};'
     f'color:{layer_text[cur_layer]};font-size:0.75rem;font-weight:600;">'
-    f'Klinik katman: {cur_layer}</div>',
+    f'Clinical layer: {cur_layer}</div>',
     unsafe_allow_html=True
 )
 
@@ -1717,9 +1741,7 @@ if uploads:
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('<div style="margin-top:8px;">', unsafe_allow_html=True)
-st.markdown('<span class="small-note">* Age and Sex required. Laterality optional (K0) or recommended (K1+).</span>', unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
-
+st.markdown('<span class="small-note">* Age and Sex required. Analyzed eye optional (K0) or recommended (K1+).</span>', unsafe_allow_html=True)
 analyze = st.button("🔬  Analyze  —  3-Round Debate", type="primary", use_container_width=True)
 
 if analyze:
@@ -1839,7 +1861,7 @@ if st.session_state.report_history:
             '<div style="display:inline-flex;align-items:center;gap:6px;'
             'padding:4px 12px;border-radius:999px;background:#FDEBD0;'
             'color:#784212;font-size:0.75rem;font-weight:600;margin-bottom:10px;">'
-            "&#x26A0; Sheets kaydi basarisiz - JSON indir</div>",
+            "&#x26A0; Sheets: save failed — download JSON</div>",
             unsafe_allow_html=True
         )
 
