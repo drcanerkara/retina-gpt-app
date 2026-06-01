@@ -830,9 +830,8 @@ def call_gemini_vision(clinical_text: str, images, max_retries: int = 3):
         try:
             resp = gemini_client.models.generate_content(
                 model=GEMINI_VISION_MODEL,
-                config={"temperature": TEMPERATURE_GEMINI},
                 contents=[{"role": "user", "parts": parts}],
-                config={"temperature": 0, "response_mime_type": "application/json"},
+                config={"temperature": TEMPERATURE_GEMINI, "response_mime_type": "application/json"},
             )
             raw = getattr(resp, "text", None) or ""
             parsed = safe_json_extract(raw)
@@ -935,9 +934,8 @@ def call_gemini_critique(clinical_text: str, images, openai_opinion: dict, gem_r
         try:
             resp = gemini_client.models.generate_content(
                 model=GEMINI_VISION_MODEL,
-                config={"temperature": TEMPERATURE_GEMINI},
                 contents=[{"role": "user", "parts": parts}],
-                config={"temperature": 0, "response_mime_type": "application/json"},
+                config={"temperature": TEMPERATURE_GEMINI, "response_mime_type": "application/json"},
             )
             raw = getattr(resp, "text", None) or ""
             parsed = safe_json_extract(raw)
@@ -1016,9 +1014,8 @@ def call_gemini_revision(clinical_text: str, images, gem_r1: dict, oa_critique: 
         try:
             resp = gemini_client.models.generate_content(
                 model=GEMINI_VISION_MODEL,
-                config={"temperature": TEMPERATURE_GEMINI},
                 contents=[{"role": "user", "parts": parts}],
-                config={"temperature": 0, "response_mime_type": "application/json"},
+                config={"temperature": TEMPERATURE_GEMINI, "response_mime_type": "application/json"},
             )
             raw = getattr(resp, "text", None) or ""
             parsed = safe_json_extract(raw)
