@@ -707,10 +707,10 @@ def build_clinical_summary():
     elif isinstance(sys_list, str) and sys_list:
         lines.append(f"Systemic diseases: {sys_list}")
     for label, key in [
-        ("Ocular history", "ocular_history"),
-        ("Medications", "medications"),
-        ("Family history", "family_history"),
-        ("Additional notes", "additional_notes"),
+        ("Oküler öykü", "ocular_history"),
+        ("Kullandığı ilaçlar", "medications"),
+        ("Aile öyküsü", "family_history"),
+        ("Ek notlar", "additional_notes"),
     ]:
         val = (st.session_state.get(key) or "").strip()
         if val: lines.append(f"{label}: {val}")
@@ -1475,14 +1475,9 @@ st.markdown('''<div style="background:#EBF5FB;border-left:3px solid #2471A3;bord
   K0 — Sadece Görüntü (klinik bilgi girilmez)
 </div>''', unsafe_allow_html=True)
 
-col1, col2 = st.columns(2)
-with col1:
-    age = st.number_input("Age *", min_value=0, max_value=120,
-                          value=st.session_state.age or 0, step=1)
-with col2:
-    sex_opts = ["Select", "Male", "Female", "Other"]
-    sex = st.selectbox("Sex *", sex_opts,
-                       index=sex_opts.index(st.session_state.sex if st.session_state.sex in sex_opts else "Select"))
+st.markdown('''<div style="font-size:0.78rem;color:#5D6D7E;padding:4px 0 8px 0;">
+  K0 koşulunda hiçbir klinik bilgi girilmez. Yalnızca görüntü yüklenir ve analiz başlatılır.
+</div>''', unsafe_allow_html=True)
 
 # ── K1 Block ─────────────────────────────────────────────────────────────
 st.markdown('''<div style="background:#D1F2EB;border-left:3px solid #0E6655;border-radius:0 8px 8px 0;
@@ -1491,33 +1486,47 @@ st.markdown('''<div style="background:#D1F2EB;border-left:3px solid #0E6655;bord
   K1 — Temel Klinik (Yaş + Cinsiyet + Analiz Edilen Göz)
 </div>''', unsafe_allow_html=True)
 
-lat_opts = ["Select", "OD (Right)", "OS (Left)"]
-cur_lat = st.session_state.laterality if st.session_state.laterality in lat_opts else "Select"
-laterality = st.selectbox("Analyzed eye (OD/OS)", lat_opts,
-                           index=lat_opts.index(cur_lat),
+col1, col2 = st.columns(2)
+with col1:
+    age = st.number_input("Yaş *", min_value=0, max_value=120,
+                          value=st.session_state.age or 0, step=1)
+with col2:
+    sex_opts = ["Seçiniz", "Erkek", "Kadın", "Diğer"]
+    sex_map  = {"Select":"Seçiniz","Male":"Erkek","Female":"Kadın","Other":"Diğer",
+                "Seçiniz":"Seçiniz","Erkek":"Erkek","Kadın":"Kadın","Diğer":"Diğer"}
+    cur_sex  = sex_map.get(st.session_state.sex, "Seçiniz")
+    sex = st.selectbox("Cinsiyet *", sex_opts,
+                       index=sex_opts.index(cur_sex if cur_sex in sex_opts else "Seçiniz"))
+
+lat_opts = ["Seçiniz", "OD (Sağ göz)", "OS (Sol göz)"]
+lat_map  = {"Select":"Seçiniz","OD (Right)":"OD (Sağ göz)","OS (Left)":"OS (Sol göz)",
+            "Seçiniz":"Seçiniz","OD (Sağ göz)":"OD (Sağ göz)","OS (Sol göz)":"OS (Sol göz)"}
+cur_lat  = lat_map.get(st.session_state.laterality, "Seçiniz")
+laterality = st.selectbox("Analiz edilen göz *", lat_opts,
+                           index=lat_opts.index(cur_lat if cur_lat in lat_opts else "Seçiniz"),
                            help="Hangi gözün görüntüsü analiz ediliyor?")
 
 # ── K2 Block ─────────────────────────────────────────────────────────────
 st.markdown('''<div style="background:#FEF9E7;border-left:3px solid #B7950B;border-radius:0 8px 8px 0;
      padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
      letter-spacing:0.8px;text-transform:uppercase;color:#7D6608;">
-  K2 — Klinik Bulgular (GK + Semptom + Süre + Tutulum)
+  K2 — Klinik Bulgular (Görme Keskinliği + Semptom + Süre + Tutulum)
 </div>''', unsafe_allow_html=True)
 
 col_va, col_dur = st.columns(2)
 with col_va:
     visual_acuity = st.text_input(
-        "Visual acuity (Snellen)",
+        "Görme keskinliği (Snellen) *",
         value=st.session_state.get("visual_acuity",""),
-        placeholder="ör: 1.0 / 0.5 / 0.1 / CF / HM / LP",
-        help="Ham Snellen değeri: 1.0, 0.8, 0.5, 0.1, CF (parmak sayar), HM (el hareketi), LP (ışık hissi)"
+        placeholder="ör: 1.0 / 0.8 / 0.5 / 0.1 / PS / EH / IH",
+        help="Ham Snellen değeri: 1.0, 0.8, 0.5, 0.1 — PS: parmak sayar, EH: el hareketi, IH: ışık hissi"
     )
 with col_dur:
     duration = st.text_input(
-        "Duration / Onset",
+        "Süre / Başlangıç",
         value=st.session_state.get("duration",""),
-        placeholder="ör: 3 gün / 2 hafta / 6 ay / kronik",
-        help="Semptomun başlangıcından bu yana geçen süre"
+        placeholder="ör: 3 gün / 2 hafta / 6 ay / kronik / ani",
+        help="Semptomun ne zaman başladığı veya ne kadar süredir devam ettiği"
     )
 
 symp_all = ["Görme azalması","Metamorfopsi","Skotom","Fotopsi",
@@ -1527,27 +1536,27 @@ symp_all = ["Görme azalması","Metamorfopsi","Skotom","Fotopsi",
 cur_symp = st.session_state.get("primary_symptom",[])
 if isinstance(cur_symp, str): cur_symp = [cur_symp] if cur_symp else []
 primary_symptom = st.multiselect(
-    "Primary symptom(s)",
+    "Primer semptom(lar)",
     options=symp_all,
     default=[s for s in cur_symp if s in symp_all],
-    help="Birden fazla seçilebilir"
+    help="Birden fazla semptom seçilebilir"
 )
 
-inv_opts = ["Select","Unilateral","Bilateral","Bilinmiyor"]
+inv_opts = ["Seçiniz","Unilateal (tek göz)","Bilateral (iki göz)","Bilinmiyor"]
 cur_inv = st.session_state.get("involvement","Select")
-if cur_inv not in inv_opts: cur_inv = "Select"
+if cur_inv not in inv_opts: cur_inv = "Seçiniz"
 involvement = st.selectbox(
-    "Involvement pattern",
+    "Tutulum paterni",
     inv_opts,
-    index=inv_opts.index(cur_inv),
-    help="Tek göz mi, iki göz mü?"
+    index=inv_opts.index(cur_inv if cur_inv in inv_opts else "Seçiniz"),
+    help="Hastalık tek gözde mi iki gözde mi?"
 )
 
 # ── K3 Block ─────────────────────────────────────────────────────────────
 st.markdown('''<div style="background:#FDEDEC;border-left:3px solid #A93226;border-radius:0 8px 8px 0;
      padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
      letter-spacing:0.8px;text-transform:uppercase;color:#7B241C;">
-  K3 — Tam Anamnez (Sistemik + Oküler + İlaç + Aile + Notlar)
+  K3 — Tam Anamnez (Sistemik Hastalık + Öykü + İlaç + Aile + Notlar)
 </div>''', unsafe_allow_html=True)
 
 sys_all = ["Diabetes mellitus","Hipertansiyon","Otoimmün hastalık",
@@ -1556,44 +1565,46 @@ sys_all = ["Diabetes mellitus","Hipertansiyon","Otoimmün hastalık",
 cur_sys = st.session_state.get("systemic_diseases",[])
 if isinstance(cur_sys, str): cur_sys = [cur_sys] if cur_sys else []
 systemic_diseases = st.multiselect(
-    "Systemic diseases",
+    "Sistemik hastalıklar",
     options=sys_all,
     default=[s for s in cur_sys if s in sys_all],
-    help="Birden fazla seçilebilir"
+    help="Birden fazla sistemik hastalık seçilebilir"
 )
 
 col_k3a, col_k3b = st.columns(2)
 with col_k3a:
     ocular_history = st.text_input(
-        "Ocular history",
+        "Oküler öykü",
         value=st.session_state.get("ocular_history",""),
-        placeholder="ör: geçirilmiş laser, anti-VEGF, vitrektomi..."
+        placeholder="ör: lazer, anti-VEGF enjeksiyonu, vitrektomi, katarakt op..."
     )
     family_history = st.text_input(
-        "Family history",
+        "Aile öyküsü",
         value=st.session_state.get("family_history",""),
-        placeholder="ör: ailede AMD, RP, glokom..."
+        placeholder="ör: ailede AMD, RP, glokom, DM..."
     )
 with col_k3b:
     medications = st.text_input(
-        "Medications",
+        "Kullandığı ilaçlar",
         value=st.session_state.get("medications",""),
-        placeholder="ör: metformin, warfarin, klorokin..."
+        placeholder="ör: metformin, warfarin, klorokin, kortikosteroid..."
     )
     additional_notes = st.text_input(
         "Additional notes",
         value=st.session_state.get("additional_notes",""),
-        placeholder="travma öyküsü, gebelik haftası, diğer..."
+        placeholder="travma öyküsü, gebelik haftası, sistemik tedavi, diğer..."
     )
 
 # ── Update session state ──────────────────────────────────────────────────
 st.session_state.age                = int(age)
-st.session_state.sex                = sex
-st.session_state.laterality         = laterality if laterality != "Select" else ""
+sex_reverse = {"Erkek":"Male","Kadın":"Female","Diğer":"Other","Seçiniz":"Select"}
+st.session_state.sex = sex_reverse.get(sex, sex)
+lat_reverse = {"OD (Sağ göz)":"OD (Right)","OS (Sol göz)":"OS (Left)","Seçiniz":""}
+st.session_state.laterality = lat_reverse.get(laterality, laterality if laterality != "Seçiniz" else "")
 st.session_state.visual_acuity      = visual_acuity or ""
 st.session_state.primary_symptom    = primary_symptom
 st.session_state.duration           = duration or ""
-st.session_state.involvement        = involvement if involvement != "Select" else ""
+st.session_state.involvement        = involvement if involvement != "Seçiniz" else ""
 st.session_state.systemic_diseases  = systemic_diseases
 st.session_state.ocular_history     = ocular_history or ""
 st.session_state.medications        = medications or ""
@@ -1613,7 +1624,7 @@ def detect_clinical_layer():
         bool((st.session_state.get("visual_acuity") or "").strip()),
         bool(st.session_state.get("primary_symptom",[])),
         bool((st.session_state.get("duration") or "").strip()),
-        st.session_state.get("involvement","") not in ("","Select"),
+        st.session_state.get("involvement","") not in ("","Select","Seçiniz"),
     ])
     k1 = st.session_state.laterality not in ("", "Select")
     if k3: return "K3"
