@@ -317,9 +317,10 @@ if st.sidebar.button("Test Sheets Connection"):
 SHEETS_COLUMNS = [
     "timestamp","case_id","patient_id","disease_code",
     "clinical_layer","modality_set","modality_count",
-    "has_oct","has_faf","has_fa","has_octa","has_icga","has_widefield",
-    "age","sex","laterality","visual_acuity","primary_symptom",
-    "duration","systemic_diseases","free_text","uploader_id",
+    "has_fundus","has_oct","has_fa","has_faf","has_octa","has_icga","has_widefield",
+    "age","sex","analyzed_eye","involvement_pattern",
+    "visual_acuity","primary_symptoms","duration",
+    "systemic_diseases","ocular_history","medications","family_history","free_text","uploader_id",
     "arm_a_diagnosis","arm_a_confidence",
     "arm_b_diagnosis","arm_b_confidence",
     "arm_c_agreement",
@@ -407,22 +408,27 @@ def log_to_sheets(export_data: dict):
             st.session_state.get("case_id_str", export_data.get("case_id","")),
             patient_id,
             disease_code,
-            export_data.get("clinical_layer","K1"),
+            export_data.get("clinical_layer","K0"),
             st.session_state.get("modality_set","M1"),
             len(mod_values),
+            has_mod("Fundus"),
             has_mod("OCT"),
-            has_mod("FAF"),
             has_mod("FA"),
+            has_mod("FAF"),
             has_mod("OCTA"),
             has_mod("ICGA"),
             has_mod("Wide"),
             st.session_state.get("age",""),
             st.session_state.get("sex",""),
             st.session_state.get("laterality",""),
+            st.session_state.get("involvement",""),
             st.session_state.get("visual_acuity",""),
-            st.session_state.get("primary_symptom",""),
+            ", ".join(st.session_state.get("primary_symptom",[])) if isinstance(st.session_state.get("primary_symptom",[]),list) else st.session_state.get("primary_symptom",""),
             st.session_state.get("duration",""),
-            st.session_state.get("relevant_history",""),
+            ", ".join(st.session_state.get("systemic_diseases",[])) if isinstance(st.session_state.get("systemic_diseases",[]),list) else st.session_state.get("systemic_diseases",""),
+            st.session_state.get("ocular_history",""),
+            st.session_state.get("medications",""),
+            st.session_state.get("family_history",""),
             st.session_state.get("additional_notes",""),
             "",  # uploader_id — manuel girilecek
             arm_a.get("top_diagnosis",""),
@@ -508,12 +514,16 @@ def ss_init():
         # structured clinical fields
         "age": None,
         "sex": "Select",
-        "laterality": "Select",
-        "visual_acuity": "",
-        "primary_symptom": "",
-        "duration": "",
-        "relevant_history": "",
-        "additional_notes": "",
+        "laterality": "Select",          # K1: analyzed eye
+        "involvement": "Select",           # K2: unilateral/bilateral
+        "visual_acuity": "",               # K2: raw Snellen
+        "primary_symptom": [],             # K2: multiselect
+        "duration": "",                    # K2: duration text
+        "systemic_diseases": [],           # K3: multiselect
+        "ocular_history": "",              # K3: free text
+        "medications": "",                 # K3: free text
+        "family_history": "",              # K3: free text
+        "additional_notes": "",            # K3: free text
         "clinical": "",
         "clinical_layer": "K0",
         "modality_set": "M1",
@@ -556,7 +566,10 @@ def reset_case():
     st.session_state.age = None
     st.session_state.sex = "Select"
     st.session_state.laterality = "Select"
-    for f in ("visual_acuity","primary_symptom","duration","relevant_history","additional_notes","clinical","additional_clinical_note"):
+    st.session_state.involvement = "Select"
+    st.session_state.systemic_diseases = []
+    st.session_state.primary_symptom = []
+    for f in ("visual_acuity","duration","ocular_history","medications","family_history","additional_notes","clinical","additional_clinical_note"):
         st.session_state[f] = ""
 
 
@@ -669,14 +682,34 @@ def get_current_assessment_label():
 
 def build_clinical_summary():
     lines = []
+    # K0
     if st.session_state.age: lines.append(f"Age: {st.session_state.age}")
     if st.session_state.sex not in (None, "Select"): lines.append(f"Sex: {st.session_state.sex}")
-    if st.session_state.laterality not in (None, "Select"): lines.append(f"Laterality: {st.session_state.laterality}")
+    # K1
+    if st.session_state.laterality not in (None, "Select", ""):
+        lines.append(f"Analyzed eye: {st.session_state.laterality}")
+    # K2
+    if st.session_state.get("involvement") not in (None, "Select", ""):
+        lines.append(f"Involvement pattern: {st.session_state.involvement}")
+    va = (st.session_state.get("visual_acuity") or "").strip()
+    if va: lines.append(f"Visual acuity (analyzed eye): {va}")
+    symp_list = st.session_state.get("primary_symptom", [])
+    if isinstance(symp_list, list) and symp_list:
+        lines.append(f"Primary symptom(s): {', '.join(symp_list)}")
+    elif isinstance(symp_list, str) and symp_list:
+        lines.append(f"Primary symptom: {symp_list}")
+    dur = (st.session_state.get("duration") or "").strip()
+    if dur: lines.append(f"Duration: {dur}")
+    # K3
+    sys_list = st.session_state.get("systemic_diseases", [])
+    if isinstance(sys_list, list) and sys_list:
+        lines.append(f"Systemic diseases: {', '.join(sys_list)}")
+    elif isinstance(sys_list, str) and sys_list:
+        lines.append(f"Systemic diseases: {sys_list}")
     for label, key in [
-        ("Visual acuity", "visual_acuity"),
-        ("Primary symptom", "primary_symptom"),
-        ("Duration", "duration"),
-        ("Relevant history", "relevant_history"),
+        ("Ocular history", "ocular_history"),
+        ("Medications", "medications"),
+        ("Family history", "family_history"),
         ("Additional notes", "additional_notes"),
     ]:
         val = (st.session_state.get(key) or "").strip()
@@ -1369,7 +1402,7 @@ with col_cid:
     )
 
 # ── K Seçici — radio butonlar ────────────────────────────────────────────
-k_opts = ["K0 — Temel Demografik","K1 — Klinik Bilgi","K2 — Sistemik Anamnez","K3 — Serbest Metin"]
+k_opts = ["K0 — Sadece görüntü","K1 — Temel klinik","K2 — Klinik bulgular","K3 — Tam anamnez"]
 k_default = {"K0":0,"K1":1,"K2":2,"K3":3}.get(st.session_state.get("manual_k","K0"), 0)
 k_choice = st.radio(
     "Klinik Bilgi Katmanı (K)",
@@ -1386,10 +1419,10 @@ k_bgs   = {"K0":"#EBF5FB","K1":"#D1F2EB","K2":"#FEF9E7","K3":"#FDEDEC"}
 k_bords = {"K0":"#2471A3","K1":"#0E6655","K2":"#B7950B","K3":"#A93226"}
 k_texts = {"K0":"#1A5276","K1":"#0B5345","K2":"#7D6608","K3":"#7B241C"}
 k_field_info = {
-    "K0": "✅ Yaş (zorunlu)   ✅ Cinsiyet (zorunlu)   — başka hiçbir alan doldurulmasın",
-    "K1": "✅ Yaş   ✅ Cinsiyet   ○ Lateralite   ○ Görme keskinliği   ○ Süre   ○ Primer semptom",
-    "K2": "K1 alanları   +   ○ Sistemik hastalıklar (DM, HT, miyopi, tiroid...)",
-    "K3": "K2 alanları   +   ○ Serbest metin (travma, ilaç, aile öyküsü, cerrahi öykü...)",
+    "K0": "Klinik bilgi girilmez — sadece görüntü yüklenir",
+    "K1": "✅ Yaş   ✅ Cinsiyet   ✅ Analiz edilen göz (OD/OS)",
+    "K2": "K1   +   ○ Görme keskinliği   ○ Semptom(lar)   ○ Süre   ○ Tutulum paterni (uni/bilateral)",
+    "K3": "K2   +   ○ Sistemik hastalıklar   ○ Oküler öykü   ○ İlaçlar   ○ Aile öyküsü   ○ Notlar",
 }
 _sel_k = st.session_state.manual_k
 st.markdown(
@@ -1418,9 +1451,9 @@ m_bgs_r   = {"M1":"#EBF5FB","M2":"#D6EAF8","M3":"#AED6F1"}
 m_bords_r = {"M1":"#2471A3","M2":"#1A5276","M3":"#1B4F72"}
 m_texts_r = {"M1":"#1A5276","M2":"#154360","M3":"#1B4F72"}
 m_field_info = {
-    "M1": "✅ OCT   ✅ Renkli Fundus   — her vakada zorunlu temel set",
-    "M2": "✅ OCT   ✅ Renkli Fundus   + 1 ek modalite (FA / FAF / OCTA / ICGA) — hastalık grubuna göre seç",
-    "M3": "✅ OCT   ✅ Renkli Fundus   + 2 veya daha fazla ek modalite — mevcut tüm görüntüler",
+    "M1": "✅ Renkli Fundus   — tek modalite, her vakada zorunlu temel set",
+    "M2": "✅ Renkli Fundus   + hastalık grubuna özgü EN KRİTİK 1 test (bkz. hastalık listesi)",
+    "M3": "✅ Renkli Fundus   + M2'deki test   + İKİNCİ tamamlayıcı test (bkz. hastalık listesi)",
 }
 _sel_m = st.session_state.manual_m
 st.markdown(
@@ -1439,7 +1472,7 @@ st.session_state.modality_set = st.session_state.manual_m
 st.markdown('''<div style="background:#EBF5FB;border-left:3px solid #2471A3;border-radius:0 8px 8px 0;
      padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
      letter-spacing:0.8px;text-transform:uppercase;color:#1A5276;">
-  K0 — Temel Demografik
+  K0 — Sadece Görüntü (klinik bilgi girilmez)
 </div>''', unsafe_allow_html=True)
 
 col1, col2 = st.columns(2)
@@ -1455,85 +1488,134 @@ with col2:
 st.markdown('''<div style="background:#D1F2EB;border-left:3px solid #0E6655;border-radius:0 8px 8px 0;
      padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
      letter-spacing:0.8px;text-transform:uppercase;color:#0B5345;">
-  K1 — Klinik Bilgi
+  K1 — Temel Klinik (Yaş + Cinsiyet + Analiz Edilen Göz)
 </div>''', unsafe_allow_html=True)
 
-col3, col4, col5 = st.columns(3)
-with col3:
-    lat_opts = ["Select", "OD (Right)", "OS (Left)", "OU (Both)"]
-    laterality_map = {"Select":"Select","OD (Right)":"OD (Right)","OS (Left)":"OS (Left)",
-                      "OU (Both)":"OU (Both)","Unilateral":"OD (Right)","Bilateral":"OU (Both)"}
-    cur_lat = laterality_map.get(st.session_state.laterality, "Select")
-    laterality = st.selectbox("Laterality (optional)", lat_opts,
-                               index=lat_opts.index(cur_lat if cur_lat in lat_opts else "Select"))
-with col4:
-    va_opts = ["Select","20/20 – 20/40 (iyi)","20/50 – 20/200 (orta)",
-               "20/200 altı (kötü)","Parmak sayar (CF)","El hareketi (HM)",
-               "Işık hissi (LP)","Işık hissi yok (NLP)"]
-    cur_va = st.session_state.visual_acuity if st.session_state.visual_acuity in va_opts else "Select"
-    visual_acuity = st.selectbox("Visual acuity", va_opts,
-                                  index=va_opts.index(cur_va))
-with col5:
-    dur_opts = ["Select","Akut (0-7 gün)","Subakut (1-4 hafta)",
-                "Kronik (1-3 ay)","Uzun kronik (3 ay+)","Bilinmiyor"]
-    cur_dur = st.session_state.duration if st.session_state.duration in dur_opts else "Select"
-    duration = st.selectbox("Duration", dur_opts,
-                             index=dur_opts.index(cur_dur))
-
-# Semptom dropdown
-symp_opts = ["Select","Bulanık görme","Metamorfopsi","Skotom / görme alanı kaybı",
-             "Ani görme kaybı","Fotofobi / ışık hassasiyeti",
-             "Floater / uçuşan cisim","Asemptomatik","Diğer"]
-cur_symp = st.session_state.primary_symptom if st.session_state.primary_symptom in symp_opts else "Select"
-primary_symptom = st.selectbox("Primary symptom", symp_opts,
-                                index=symp_opts.index(cur_symp))
+lat_opts = ["Select", "OD (Right)", "OS (Left)"]
+cur_lat = st.session_state.laterality if st.session_state.laterality in lat_opts else "Select"
+laterality = st.selectbox("Analyzed eye (OD/OS)", lat_opts,
+                           index=lat_opts.index(cur_lat),
+                           help="Hangi gözün görüntüsü analiz ediliyor?")
 
 # ── K2 Block ─────────────────────────────────────────────────────────────
 st.markdown('''<div style="background:#FEF9E7;border-left:3px solid #B7950B;border-radius:0 8px 8px 0;
      padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
      letter-spacing:0.8px;text-transform:uppercase;color:#7D6608;">
-  K2 — Sistemik Anamnez
+  K2 — Klinik Bulgular (GK + Semptom + Süre + Tutulum)
 </div>''', unsafe_allow_html=True)
 
-relevant_history = st.text_input(
-    "Systemic diseases",
-    value=st.session_state.relevant_history,
-    placeholder="e.g. DM type 2, hypertension, high myopia, thyroid disease...")
+col_va, col_dur = st.columns(2)
+with col_va:
+    visual_acuity = st.text_input(
+        "Visual acuity (Snellen)",
+        value=st.session_state.get("visual_acuity",""),
+        placeholder="ör: 1.0 / 0.5 / 0.1 / CF / HM / LP",
+        help="Ham Snellen değeri: 1.0, 0.8, 0.5, 0.1, CF (parmak sayar), HM (el hareketi), LP (ışık hissi)"
+    )
+with col_dur:
+    duration = st.text_input(
+        "Duration / Onset",
+        value=st.session_state.get("duration",""),
+        placeholder="ör: 3 gün / 2 hafta / 6 ay / kronik",
+        help="Semptomun başlangıcından bu yana geçen süre"
+    )
+
+symp_all = ["Görme azalması","Metamorfopsi","Skotom","Fotopsi",
+            "Floaters / uçuşan cisim","Gece körlüğü",
+            "Renk görme bozukluğu","Periferik görme kaybı",
+            "Asemptomatik","Diğer"]
+cur_symp = st.session_state.get("primary_symptom",[])
+if isinstance(cur_symp, str): cur_symp = [cur_symp] if cur_symp else []
+primary_symptom = st.multiselect(
+    "Primary symptom(s)",
+    options=symp_all,
+    default=[s for s in cur_symp if s in symp_all],
+    help="Birden fazla seçilebilir"
+)
+
+inv_opts = ["Select","Unilateral","Bilateral","Bilinmiyor"]
+cur_inv = st.session_state.get("involvement","Select")
+if cur_inv not in inv_opts: cur_inv = "Select"
+involvement = st.selectbox(
+    "Involvement pattern",
+    inv_opts,
+    index=inv_opts.index(cur_inv),
+    help="Tek göz mi, iki göz mü?"
+)
 
 # ── K3 Block ─────────────────────────────────────────────────────────────
 st.markdown('''<div style="background:#FDEDEC;border-left:3px solid #A93226;border-radius:0 8px 8px 0;
      padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
      letter-spacing:0.8px;text-transform:uppercase;color:#7B241C;">
-  K3 — Serbest Metin
+  K3 — Tam Anamnez (Sistemik + Oküler + İlaç + Aile + Notlar)
 </div>''', unsafe_allow_html=True)
 
-additional_notes = st.text_area(
-    "Free text",
-    value=st.session_state.additional_notes,
-    placeholder="Trauma history, medications, family history, surgical history, other relevant notes...",
-    height=72)
+sys_all = ["Diabetes mellitus","Hipertansiyon","Otoimmün hastalık",
+           "Malignite öyküsü","Tiroid hastalığı","Yüksek miyopi",
+           "Sigara kullanımı","Gebelik","Yok","Diğer"]
+cur_sys = st.session_state.get("systemic_diseases",[])
+if isinstance(cur_sys, str): cur_sys = [cur_sys] if cur_sys else []
+systemic_diseases = st.multiselect(
+    "Systemic diseases",
+    options=sys_all,
+    default=[s for s in cur_sys if s in sys_all],
+    help="Birden fazla seçilebilir"
+)
+
+col_k3a, col_k3b = st.columns(2)
+with col_k3a:
+    ocular_history = st.text_input(
+        "Ocular history",
+        value=st.session_state.get("ocular_history",""),
+        placeholder="ör: geçirilmiş laser, anti-VEGF, vitrektomi..."
+    )
+    family_history = st.text_input(
+        "Family history",
+        value=st.session_state.get("family_history",""),
+        placeholder="ör: ailede AMD, RP, glokom..."
+    )
+with col_k3b:
+    medications = st.text_input(
+        "Medications",
+        value=st.session_state.get("medications",""),
+        placeholder="ör: metformin, warfarin, klorokin..."
+    )
+    additional_notes = st.text_input(
+        "Additional notes",
+        value=st.session_state.get("additional_notes",""),
+        placeholder="travma öyküsü, gebelik haftası, diğer..."
+    )
 
 # ── Update session state ──────────────────────────────────────────────────
-st.session_state.age              = int(age)
-st.session_state.sex              = sex
-st.session_state.laterality       = laterality if laterality != "Select" else ""
-st.session_state.visual_acuity    = visual_acuity if visual_acuity != "Select" else ""
-st.session_state.primary_symptom  = primary_symptom if primary_symptom != "Select" else ""
-st.session_state.duration         = duration if duration != "Select" else ""
-st.session_state.relevant_history = relevant_history or ""
-st.session_state.additional_notes = additional_notes or ""
+st.session_state.age                = int(age)
+st.session_state.sex                = sex
+st.session_state.laterality         = laterality if laterality != "Select" else ""
+st.session_state.visual_acuity      = visual_acuity or ""
+st.session_state.primary_symptom    = primary_symptom
+st.session_state.duration           = duration or ""
+st.session_state.involvement        = involvement if involvement != "Select" else ""
+st.session_state.systemic_diseases  = systemic_diseases
+st.session_state.ocular_history     = ocular_history or ""
+st.session_state.medications        = medications or ""
+st.session_state.family_history     = family_history or ""
+st.session_state.additional_notes   = additional_notes or ""
 
-# ── Clinical layer detection (for Sheets/JSON export) ─────────────────────
+# ── Clinical layer detection ──────────────────────────────────────────────
 def detect_clinical_layer():
-    """Detect which clinical knowledge layer (K0-K3) is filled."""
-    k3 = bool(st.session_state.additional_notes.strip())
-    k2 = bool(st.session_state.relevant_history.strip())
-    k1 = any([
-        st.session_state.laterality not in ("", "Select"),
-        st.session_state.visual_acuity not in ("", "Select"),
-        st.session_state.duration not in ("", "Select"),
-        st.session_state.primary_symptom not in ("", "Select"),
+    k3 = any([
+        bool(st.session_state.get("systemic_diseases",[])),
+        bool((st.session_state.get("ocular_history") or "").strip()),
+        bool((st.session_state.get("medications") or "").strip()),
+        bool((st.session_state.get("family_history") or "").strip()),
+        bool((st.session_state.get("additional_notes") or "").strip()),
     ])
+    k2 = any([
+        bool((st.session_state.get("visual_acuity") or "").strip()),
+        bool(st.session_state.get("primary_symptom",[])),
+        bool((st.session_state.get("duration") or "").strip()),
+        st.session_state.get("involvement","") not in ("","Select"),
+    ])
+    k1 = st.session_state.laterality not in ("", "Select")
     if k3: return "K3"
     if k2: return "K2"
     if k1: return "K1"
