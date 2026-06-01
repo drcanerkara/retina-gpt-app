@@ -315,21 +315,66 @@ if st.sidebar.button("Test Sheets Connection"):
 # Google Sheets
 # =========================
 SHEETS_COLUMNS = [
-    "timestamp","case_id","patient_id","disease_code",
-    "clinical_layer","modality_set","modality_count",
-    "has_fundus","has_oct","has_fa","has_faf","has_octa","has_icga","has_widefield",
-    "age","sex","analyzed_eye","involvement_pattern",
-    "visual_acuity","primary_symptoms","duration",
-    "systemic_diseases","ocular_history","medications","family_history","free_text","uploader_id",
-    "arm_a_diagnosis","arm_a_confidence",
-    "arm_b_diagnosis","arm_b_confidence",
-    "arm_c_agreement",
-    "agreed_r1","agreed_r3","debate_changed",
-    "oa_revision_type","gem_revision_type","critique_failed",
-    "final_diagnosis","final_confidence",
-    "openai_model_used","openai_fingerprint","prompt_version","analysis_language",
-    "temperature_openai","temperature_gemini","seed_openai",
-    "high_uncertainty_case","ref_diagnosis","correctness_arm_a","correctness_arm_b","correctness_arm_d","grader_notes",
+    # ── Study identifiers ──────────────────────────────────────────
+    "StudyCaseID",          # P001-M1-K1
+    "PatientCode",          # P001
+    "Eye",                  # OD / OS
+    "M_Level",              # M1 / M2 / M3
+    "K_Level",              # K0 / K1 / K2 / K3
+    "ImageSetID",           # modality combination tag
+    "Fundus_File",          # TRUE/FALSE
+    "OCT_File",             # TRUE/FALSE
+    "FFA_File",             # TRUE/FALSE (FA)
+    "FAF_File",             # TRUE/FALSE
+    "OCTA_File",            # TRUE/FALSE
+    "ICGA_File",            # TRUE/FALSE
+    "Widefield_File",       # TRUE/FALSE
+    # ── Clinical input ─────────────────────────────────────────────
+    "Age","Sex","InvolvementPattern",
+    "VisualAcuity","PrimarySymptoms","Duration",
+    "SystemicDiseases","OcularHistory","Medications","FamilyHistory","FreeText",
+    "ClinicalInput_Text",   # full clinical summary sent to model
+    "UploaderID",           # A1 / A2 / A3
+    # ── Run metadata ───────────────────────────────────────────────
+    "AnalysisDate",         # timestamp
+    "Model",                # openai model used
+    "ModelFingerprint",     # system_fingerprint
+    "PromptVersion",        # v1.2
+    "AnalysisLanguage",     # en
+    "TemperatureOpenAI",    # 0
+    "TemperatureGemini",    # 0.0
+    "SeedOpenAI",           # 42
+    "RunID",                # case_id + timestamp hash (unique per run)
+    # ── AI outputs ─────────────────────────────────────────────────
+    # Arm A — GPT-4o solo
+    "ArmA_Top1","ArmA_Top2","ArmA_Top3","ArmA_Confidence",
+    # Arm B — Gemini solo
+    "ArmB_Top1","ArmB_Top2","ArmB_Top3","ArmB_Confidence",
+    # Arm C — parallel no-debate
+    "ArmC_Agreement",
+    # Arm D — debate
+    "ArmD_Top1","ArmD_Top2","ArmD_Top3","ArmD_Confidence",
+    # ── Debate metrics ─────────────────────────────────────────────
+    "AgreementStatus_R1",   # agreed_r1
+    "AgreementStatus_R3",   # agreed_r3
+    "DebateChangedDiagnosis",
+    "SpecialistA_RevisionType",  # evidence_based/sycophantic/maintained/failed
+    "SpecialistB_RevisionType",
+    "CritiqueFailed",
+    "NeedsHumanReview",     # high_uncertainty_case
+    # ── Reference diagnosis (researcher fills) ─────────────────────
+    "DiagnosisCategory",    # VA / MK / KD / UV / CR / TU
+    "PrimaryDiagnosis",     # ref_diagnosis
+    "Expert1Diagnosis",     # manuel
+    "Expert2Diagnosis",     # manuel
+    "AdjudicatorDiagnosis", # manuel (if experts disagree)
+    "ConsensusStatus",      # manuel: AGREE / DISAGREE / ADJUDICATED
+    "FinalReferenceDiagnosis",  # final ground truth
+    # ── Scoring (researcher fills) ─────────────────────────────────
+    "CorrectTop1_ArmA","CorrectTop3_ArmA","CorrectCategory_ArmA",
+    "CorrectTop1_ArmB","CorrectTop3_ArmB","CorrectCategory_ArmB",
+    "CorrectTop1_ArmD","CorrectTop3_ArmD","CorrectCategory_ArmD",
+    "GraderNotes",
 ]
 
 def get_sheets_client():
@@ -407,22 +452,18 @@ def log_to_sheets(export_data: dict):
 
         row = [
             datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            st.session_state.get("case_id_str", export_data.get("case_id","")),
-            patient_id,
-            disease_code,
-            export_data.get("clinical_layer","K0"),
-            st.session_state.get("modality_set","M1"),
-            len(mod_values),
-            has_mod("Fundus"),
-            has_mod("OCT"),
-            has_mod("FA"),
-            has_mod("FAF"),
-            has_mod("OCTA"),
-            has_mod("ICGA"),
-            has_mod("Wide"),
+            # ── Study identifiers ──────────────────────────────────────
+            st.session_state.get("case_id_str", export_data.get("case_id","")),  # StudyCaseID
+            patient_id,                                                            # PatientCode
+            st.session_state.get("laterality",""),                                # Eye
+            st.session_state.get("modality_set","M1"),                            # M_Level
+            export_data.get("clinical_layer","K0"),                               # K_Level
+            f"{st.session_state.get('modality_set','M1')}-{'-'.join([m.split(':')[0].strip() for m in mod_values[:3]])}",  # ImageSetID
+            has_mod("Fundus"), has_mod("OCT"), has_mod("FA"),
+            has_mod("FAF"), has_mod("OCTA"), has_mod("ICGA"), has_mod("Wide"),
+            # ── Clinical input ──────────────────────────────────────────
             st.session_state.get("age",""),
             st.session_state.get("sex",""),
-            st.session_state.get("laterality",""),
             st.session_state.get("involvement",""),
             st.session_state.get("visual_acuity",""),
             ", ".join(st.session_state.get("primary_symptom",[])) if isinstance(st.session_state.get("primary_symptom",[]),list) else st.session_state.get("primary_symptom",""),
@@ -432,33 +473,48 @@ def log_to_sheets(export_data: dict):
             st.session_state.get("medications",""),
             st.session_state.get("family_history",""),
             st.session_state.get("additional_notes",""),
-            "",  # uploader_id — manuel girilecek
+            export_data.get("clinical",""),                                        # ClinicalInput_Text
+            "",                                                                    # UploaderID — manuel
+            # ── Run metadata ────────────────────────────────────────────
+            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),                # AnalysisDate
+            st.session_state.get("openai_model_used", OPENAI_VISION_MODEL),       # Model
+            st.session_state.get("openai_fingerprint",""),                        # ModelFingerprint
+            PROMPT_VERSION,                                                        # PromptVersion
+            ANALYSIS_LANGUAGE,                                                    # AnalysisLanguage
+            str(TEMPERATURE_OPENAI),                                              # TemperatureOpenAI
+            str(TEMPERATURE_GEMINI),                                              # TemperatureGemini
+            str(SEED_OPENAI),                                                     # SeedOpenAI
+            f"{st.session_state.get('case_id_str','')}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",  # RunID
+            # ── AI outputs ──────────────────────────────────────────────
             arm_a.get("top_diagnosis",""),
+            (arm_a.get("top_differentials") or ["","",""])[0] if arm_a.get("top_differentials") else "",
+            (arm_a.get("top_differentials") or ["","",""])[1] if len(arm_a.get("top_differentials") or []) > 1 else "",
             arm_a.get("confidence",""),
             arm_b.get("top_diagnosis",""),
+            (arm_b.get("top_differentials") or ["","",""])[0] if arm_b.get("top_differentials") else "",
+            (arm_b.get("top_differentials") or ["","",""])[1] if len(arm_b.get("top_differentials") or []) > 1 else "",
             arm_b.get("confidence",""),
             str(arm_c.get("agreement","")),
+            arm_d.get("final_diagnosis", (arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_diagnosis","")),
+            ((arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_differentials") or ["",""])[0],
+            ((arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_differentials") or ["",""])[1] if len(((arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_differentials") or [])) > 1 else "",
+            arm_d.get("confidence_label",""),
+            # ── Debate metrics ───────────────────────────────────────────
             str(conv.get("agreed_r1","")),
             str(conv.get("agreed_r3","")),
             str(conv.get("debate_changed_outcome","")),
             oa_c.get("revision_type",""),
             gem_c.get("revision_type",""),
             str(oa_c.get("revision_type","") == "failed" or gem_c.get("revision_type","") == "failed"),
-            arm_d.get("final_diagnosis", (arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_diagnosis","")),
-            arm_d.get("confidence_label",""),
-            st.session_state.get("openai_model_used", OPENAI_VISION_MODEL),
-            st.session_state.get("openai_fingerprint", ""),
-            PROMPT_VERSION,
-            ANALYSIS_LANGUAGE,
-            str(TEMPERATURE_OPENAI),
-            str(TEMPERATURE_GEMINI),
-            str(SEED_OPENAI),
             str(st.session_state.get("high_uncertainty_case", False)),
-            "",  # ref_diagnosis — manuel
-            "",  # correctness_arm_a — manuel
-            "",  # correctness_arm_b — manuel
-            "",  # correctness_arm_d — manuel
-            "",  # grader_notes — manuel
+            # ── Reference diagnosis — researcher fills ───────────────────
+            disease_code,                                                          # DiagnosisCategory
+            "","","","","","",                                                    # PrimaryDiagnosis..FinalReferenceDiagnosis
+            # ── Scoring — researcher fills ───────────────────────────────
+            "","","",  # ArmA
+            "","","",  # ArmB
+            "","","",  # ArmD
+            "",        # GraderNotes
         ]
 
         ws.append_row(row, value_input_option="USER_ENTERED")
