@@ -1503,7 +1503,7 @@ k_choice = st.radio(
     key="k_radio",
     help="Bu vakada hangi klinik bilgi katmanını dolduracaksınız?"
 )
-st.session_state.manual_k = k_choice.split("—")[0].strip()
+st.session_state.manual_k = k_choice.split("—")[0].strip()  # e.g. "K0"
 
 # K bilgi kutusu
 k_bgs   = {"K0":"#EBF5FB","K1":"#D1F2EB","K2":"#FEF9E7","K3":"#FDEDEC"}
@@ -1515,7 +1515,7 @@ k_field_info = {
     "K2": "K1   +   ○ Visual acuity   ○ Symptom(s)   ○ Duration   ○ Involvement pattern",
     "K3": "K2   +   ○ Systemic diseases   ○ Ocular history   ○ Medications   ○ Family history   ○ Notes",
 }
-_sel_k = st.session_state.manual_k
+_sel_k = st.session_state.manual_k.strip()[:2]  # "K0", "K1", "K2", "K3"
 st.markdown(
     f'''<div style="background:{k_bgs[_sel_k]};border-left:3px solid {k_bords[_sel_k]};
     border-radius:0 8px 8px 0;padding:8px 12px;margin:4px 0 14px 0;
