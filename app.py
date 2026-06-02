@@ -315,66 +315,54 @@ if st.sidebar.button("Test Sheets Connection"):
 # Google Sheets
 # =========================
 SHEETS_COLUMNS = [
-    # ── Study identifiers ──────────────────────────────────────────
+    # ── 1. Study identifiers ───────────────────────────────────────
     "StudyCaseID",          # P001-M1-K1
     "PatientCode",          # P001
     "Eye",                  # OD / OS
     "M_Level",              # M1 / M2 / M3
     "K_Level",              # K0 / K1 / K2 / K3
-    "ImageSetID",           # modality combination tag
-    "Fundus_File",          # TRUE/FALSE
-    "OCT_File",             # TRUE/FALSE
-    "FFA_File",             # TRUE/FALSE (FA)
-    "FAF_File",             # TRUE/FALSE
-    "OCTA_File",            # TRUE/FALSE
-    "ICGA_File",            # TRUE/FALSE
-    "Widefield_File",       # TRUE/FALSE
-    # ── Clinical input ─────────────────────────────────────────────
+    # ── 2. Reference diagnosis (researcher fills BEFORE analysis) ──
+    "DiagnosisCategory",    # VA / MK / KD / UV / CR / TU
+    "PrimaryDiagnosis",     # ref_diagnosis — researcher fills
+    "Expert1Diagnosis",     # researcher fills
+    "Expert2Diagnosis",     # researcher fills
+    "AdjudicatorDiagnosis", # if experts disagree
+    "ConsensusStatus",      # AGREE / DISAGREE / ADJUDICATED
+    "FinalReferenceDiagnosis",  # final ground truth
+    # ── 3. Clinical input (assistant fills via form) ───────────────
     "Age","Sex","InvolvementPattern",
     "VisualAcuity","PrimarySymptoms","Duration",
     "SystemicDiseases","OcularHistory","Medications","FamilyHistory","FreeText",
-    "ClinicalInput_Text",   # full clinical summary sent to model
     "UploaderID",           # A1 / A2 / A3
-    # ── Run metadata ───────────────────────────────────────────────
-    "AnalysisDate",         # timestamp
-    "Model",                # openai model used
-    "ModelFingerprint",     # system_fingerprint
-    "PromptVersion",        # v1.2
-    "AnalysisLanguage",     # en
-    "TemperatureOpenAI",    # 0
-    "TemperatureGemini",    # 0.0
-    "SeedOpenAI",           # 42
-    "RunID",                # case_id + timestamp hash (unique per run)
-    # ── AI outputs ─────────────────────────────────────────────────
-    # Arm A — GPT-4o solo
+    # ── 4. Imaging (auto-detected) ─────────────────────────────────
+    "ImageSetID",
+    "Fundus_File","OCT_File","FFA_File","FAF_File",
+    "OCTA_File","ICGA_File","Widefield_File",
+    # ── 5. AI outputs (auto-filled after analysis) ─────────────────
     "ArmA_Top1","ArmA_Top2","ArmA_Top3","ArmA_Confidence",
-    # Arm B — Gemini solo
     "ArmB_Top1","ArmB_Top2","ArmB_Top3","ArmB_Confidence",
-    # Arm C — parallel no-debate
     "ArmC_Agreement",
-    # Arm D — debate
     "ArmD_Top1","ArmD_Top2","ArmD_Top3","ArmD_Confidence",
-    # ── Debate metrics ─────────────────────────────────────────────
-    "AgreementStatus_R1",   # agreed_r1
-    "AgreementStatus_R3",   # agreed_r3
+    # ── 6. Debate metrics (auto-filled) ────────────────────────────
+    "AgreementStatus_R1",
+    "AgreementStatus_R3",
     "DebateChangedDiagnosis",
-    "SpecialistA_RevisionType",  # evidence_based/sycophantic/maintained/failed
+    "SpecialistA_RevisionType",
     "SpecialistB_RevisionType",
     "CritiqueFailed",
-    "NeedsHumanReview",     # high_uncertainty_case
-    # ── Reference diagnosis (researcher fills) ─────────────────────
-    "DiagnosisCategory",    # VA / MK / KD / UV / CR / TU
-    "PrimaryDiagnosis",     # ref_diagnosis
-    "Expert1Diagnosis",     # manuel
-    "Expert2Diagnosis",     # manuel
-    "AdjudicatorDiagnosis", # manuel (if experts disagree)
-    "ConsensusStatus",      # manuel: AGREE / DISAGREE / ADJUDICATED
-    "FinalReferenceDiagnosis",  # final ground truth
-    # ── Scoring (researcher fills) ─────────────────────────────────
+    "NeedsHumanReview",
+    # ── 7. Scoring (researcher fills AFTER analysis) ───────────────
     "CorrectTop1_ArmA","CorrectTop3_ArmA","CorrectCategory_ArmA",
     "CorrectTop1_ArmB","CorrectTop3_ArmB","CorrectCategory_ArmB",
     "CorrectTop1_ArmD","CorrectTop3_ArmD","CorrectCategory_ArmD",
     "GraderNotes",
+    # ── 8. Run metadata (auto-filled) ──────────────────────────────
+    "AnalysisDate",
+    "Model","ModelFingerprint",
+    "PromptVersion","AnalysisLanguage",
+    "TemperatureOpenAI","TemperatureGemini","SeedOpenAI",
+    "RunID",
+    "ClinicalInput_Text",   # full clinical summary sent to model
 ]
 
 def get_sheets_client():
@@ -438,7 +426,19 @@ def log_to_sheets(export_data: dict):
         mod_values = [m.split(":")[-1].strip() for m in mods]
 
         def has_mod(keyword):
-            return "TRUE" if any(keyword.lower() in m.lower() for m in mod_values) else "FALSE"
+            kw = keyword.lower()
+            for m in mod_values:
+                ml = m.lower()
+                # Exact match for short keywords to avoid FA matching FAF etc.
+                if kw == "fa":
+                    if ml in ("fa","fluorescein angiography","ffa","fluorescein angiogram"):
+                        return "TRUE"
+                elif kw == "faf":
+                    if "faf" in ml or "fundus autofluorescence" in ml:
+                        return "TRUE"
+                elif kw in ml:
+                    return "TRUE"
+            return "FALSE"
 
         # Parse patient_id and disease_code from additional_notes
         notes = st.session_state.get("additional_notes","")
@@ -458,7 +458,7 @@ def log_to_sheets(export_data: dict):
             st.session_state.get("laterality",""),                                # Eye
             st.session_state.get("modality_set","M1"),                            # M_Level
             export_data.get("clinical_layer","K0"),                               # K_Level
-            f"{st.session_state.get('modality_set','M1')}-{'-'.join([m.split(':')[0].strip() for m in mod_values[:3]])}",  # ImageSetID
+            f"{st.session_state.get('modality_set','M1')}-{'+'.join([v[:4].replace(' ','') for v in mod_values[:3]])}",  # ImageSetID
             has_mod("Fundus"), has_mod("OCT"), has_mod("FA"),
             has_mod("FAF"), has_mod("OCTA"), has_mod("ICGA"), has_mod("Wide"),
             # ── Clinical input ──────────────────────────────────────────
@@ -1794,12 +1794,17 @@ if uploads:
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('<div style="margin-top:8px;">', unsafe_allow_html=True)
-st.markdown('<span class="small-note">* Age and Sex required. Analyzed eye optional (K0) or recommended (K1+).</span>', unsafe_allow_html=True)
+st.markdown('<span class="small-note">* K0: images only. K1+: Age and Sex required.</span>', unsafe_allow_html=True)
 analyze = st.button("🔬  Analyze  —  3-Round Debate", type="primary", use_container_width=True)
 
 if analyze:
     missing = []
-    if sex == "Select": missing.append("Sex")
+    # Read K level directly from radio widget value (most current)
+    _k_raw = st.session_state.get("k_radio", "K0 — Image only")
+    _k = _k_raw.split("—")[0].strip()
+    if _k not in ("K0", "K0 ") :
+        if sex == "Select": missing.append("Sex")
+        if age == 0: missing.append("Age")
     if missing:
         st.error("Please complete required fields: " + ", ".join(missing))
     elif not uploads:
