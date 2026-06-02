@@ -1570,119 +1570,141 @@ st.markdown('''<div style="font-size:0.78rem;color:#5D6D7E;padding:4px 0 8px 0;"
   In K0 condition, no clinical data is entered. Only images are uploaded and analysis is initiated.
 </div>''', unsafe_allow_html=True)
 
+# Hide K1/K2/K3 blocks based on selection
+_hide_k1 = _sel_k == "K0"
+_hide_k2 = _sel_k in ("K0","K1")
+_hide_k3 = _sel_k in ("K0","K1","K2")
+if _hide_k1:
+    st.markdown('''<style>
+    [data-testid="stVerticalBlock"] .k1-block {display:none !important;}
+    </style>''', unsafe_allow_html=True)
+
 # ── K1 Block ─────────────────────────────────────────────────────────────
-st.markdown('''<div style="background:#D1F2EB;border-left:3px solid #0E6655;border-radius:0 8px 8px 0;
-     padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
-     letter-spacing:0.8px;text-transform:uppercase;color:#0B5345;">
-  K1 — Basic Clinical (Age + Sex + Analyzed Eye)
-</div>''', unsafe_allow_html=True)
+if not _hide_k1:
+    st.markdown('''<div style="background:#D1F2EB;border-left:3px solid #0E6655;border-radius:0 8px 8px 0;
+         padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
+         letter-spacing:0.8px;text-transform:uppercase;color:#0B5345;">
+      K1 — Basic Clinical (Age + Sex + Analyzed Eye)
+    </div>''', unsafe_allow_html=True)
 
 col1, col2 = st.columns(2)
 with col1:
-    age = st.number_input("Age *", min_value=0, max_value=120,
+    age = st.number_input("Age", min_value=0, max_value=120,
                           value=st.session_state.age or 0, step=1)
 with col2:
     sex_opts = ["Select", "Male", "Female", "Other"]
     sex_map  = {"Select":"Select","Male":"Male","Female":"Female","Other":"Other"}
     cur_sex  = sex_map.get(st.session_state.sex, "Select")
-    sex = st.selectbox("Sex *", sex_opts,
+    sex = st.selectbox("Sex", sex_opts,
                        index=sex_opts.index(cur_sex if cur_sex in sex_opts else "Seçiniz"))
 
 lat_opts = ["Select", "OD (Right)", "OS (Left)"]
 lat_map  = {"Select":"Select","OD (Right)":"OD (Right)","OS (Left)":"OS (Left)"}
 cur_lat  = lat_map.get(st.session_state.laterality, "Select")
-laterality = st.selectbox("Analyzed eye *", lat_opts,
+laterality = st.selectbox("Analyzed eye", lat_opts,
                            index=lat_opts.index(cur_lat if cur_lat in lat_opts else "Select"),
                            help="Which eye's images are being analyzed?")
 
 # ── K2 Block ─────────────────────────────────────────────────────────────
-st.markdown('''<div style="background:#FEF9E7;border-left:3px solid #B7950B;border-radius:0 8px 8px 0;
-     padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
-     letter-spacing:0.8px;text-transform:uppercase;color:#7D6608;">
-  K2 — Clinical Findings (VA + Symptoms + Duration + Involvement)
-</div>''', unsafe_allow_html=True)
+if not _hide_k2:
+    st.markdown('''<div style="background:#FEF9E7;border-left:3px solid #B7950B;border-radius:0 8px 8px 0;
+         padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
+         letter-spacing:0.8px;text-transform:uppercase;color:#7D6608;">
+      K2 — Clinical Findings (VA + Symptoms + Duration + Involvement)
+    </div>''', unsafe_allow_html=True)
 
-col_va, col_dur = st.columns(2)
-with col_va:
-    visual_acuity = st.text_input(
-        "Visual acuity (Snellen)",
-        value=st.session_state.get("visual_acuity",""),
-        placeholder="e.g. 1.0 / 0.8 / 0.5 / 0.1 / CF / HM / LP",
-        help="Raw Snellen: 1.0, 0.8, 0.5, 0.1 — CF: counting fingers, HM: hand motion, LP: light perception"
+if not _hide_k2:
+    col_va, col_dur = st.columns(2)
+    with col_va:
+        visual_acuity = st.text_input(
+            "Visual acuity (Snellen)",
+            value=st.session_state.get("visual_acuity",""),
+            placeholder="e.g. 1.0 / 0.8 / 0.5 / 0.1 / CF / HM / LP",
+            help="Raw Snellen: 1.0, 0.8, 0.5, 0.1 — CF: counting fingers, HM: hand motion, LP: light perception"
+        )
+    with col_dur:
+        duration = st.text_input(
+            "Duration / Onset",
+            value=st.session_state.get("duration",""),
+            placeholder="e.g. 3 days / 2 weeks / 6 months / chronic",
+            help="When symptoms started or how long they have persisted"
+        )
+    symp_all = ["Visual loss","Metamorphopsia","Scotoma","Photopsia",
+                "Floaters","Nyctalopia (night blindness)",
+                "Dyschromatopsia","Peripheral visual loss",
+                "Asymptomatic","Other"]
+    cur_symp = st.session_state.get("primary_symptom",[])
+    if isinstance(cur_symp, str): cur_symp = [cur_symp] if cur_symp else []
+    primary_symptom = st.multiselect(
+        "Primary symptom(s)",
+        options=symp_all,
+        default=[s for s in cur_symp if s in symp_all],
+        help="Multiple symptoms can be selected"
     )
-with col_dur:
-    duration = st.text_input(
-        "Duration / Onset",
-        value=st.session_state.get("duration",""),
-        placeholder="e.g. 3 days / 2 weeks / 6 months / chronic",
-        help="When symptoms started or how long they have persisted"
+    inv_opts = ["Select","Unilateral","Bilateral","Unknown"]
+    cur_inv = st.session_state.get("involvement","Select")
+    if cur_inv not in inv_opts: cur_inv = "Select"
+    involvement = st.selectbox(
+        "Involvement pattern",
+        inv_opts,
+        index=inv_opts.index(cur_inv if cur_inv in inv_opts else "Select"),
+        help="Is the disease unilateral or bilateral?"
     )
-
-symp_all = ["Visual loss","Metamorphopsia","Scotoma","Photopsia",
-            "Floaters","Nyctalopia (night blindness)",
-            "Dyschromatopsia","Peripheral visual loss",
-            "Asymptomatic","Other"]
-cur_symp = st.session_state.get("primary_symptom",[])
-if isinstance(cur_symp, str): cur_symp = [cur_symp] if cur_symp else []
-primary_symptom = st.multiselect(
-    "Primary symptom(s)",
-    options=symp_all,
-    default=[s for s in cur_symp if s in symp_all],
-    help="Multiple symptoms can be selected"
-)
-
-inv_opts = ["Select","Unilateral","Bilateral","Unknown"]
-cur_inv = st.session_state.get("involvement","Select")
-if cur_inv not in inv_opts: cur_inv = "Select"
-involvement = st.selectbox(
-    "Involvement pattern",
-    inv_opts,
-    index=inv_opts.index(cur_inv if cur_inv in inv_opts else "Select"),
-    help="Is the disease unilateral or bilateral?"
-)
+else:
+    visual_acuity = st.session_state.get("visual_acuity","")
+    duration = st.session_state.get("duration","")
+    primary_symptom = st.session_state.get("primary_symptom",[])
+    involvement = st.session_state.get("involvement","Select")
 
 # ── K3 Block ─────────────────────────────────────────────────────────────
-st.markdown('''<div style="background:#FDEDEC;border-left:3px solid #A93226;border-radius:0 8px 8px 0;
-     padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
-     letter-spacing:0.8px;text-transform:uppercase;color:#7B241C;">
-  K3 — Full History (Systemic + Ocular + Medications + Family + Notes)
-</div>''', unsafe_allow_html=True)
+if not _hide_k3:
+    st.markdown('''<div style="background:#FDEDEC;border-left:3px solid #A93226;border-radius:0 8px 8px 0;
+         padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
+         letter-spacing:0.8px;text-transform:uppercase;color:#7B241C;">
+      K3 — Full History (Systemic + Ocular + Medications + Family + Notes)
+    </div>''', unsafe_allow_html=True)
 
-sys_all = ["Diabetes mellitus","Hypertension","Autoimmune disease",
-           "Malignancy history","Thyroid disease","High myopia",
-           "Smoking","Pregnancy","None","Other"]
-cur_sys = st.session_state.get("systemic_diseases",[])
-if isinstance(cur_sys, str): cur_sys = [cur_sys] if cur_sys else []
-systemic_diseases = st.multiselect(
-    "Systemic diseases",
-    options=sys_all,
-    default=[s for s in cur_sys if s in sys_all],
-    help="Multiple systemic diseases can be selected"
-)
-
-col_k3a, col_k3b = st.columns(2)
-with col_k3a:
-    ocular_history = st.text_input(
-        "Ocular history",
-        value=st.session_state.get("ocular_history",""),
-        placeholder="e.g. laser, anti-VEGF injection, vitrectomy, cataract surgery..."
+if not _hide_k3:
+    sys_all = ["Diabetes mellitus","Hypertension","Autoimmune disease",
+               "Malignancy history","Thyroid disease","High myopia",
+               "Smoking","Pregnancy","None","Other"]
+    cur_sys = st.session_state.get("systemic_diseases",[])
+    if isinstance(cur_sys, str): cur_sys = [cur_sys] if cur_sys else []
+    systemic_diseases = st.multiselect(
+        "Systemic diseases",
+        options=sys_all,
+        default=[s for s in cur_sys if s in sys_all],
+        help="Multiple systemic diseases can be selected"
     )
-    family_history = st.text_input(
-        "Family history",
-        value=st.session_state.get("family_history",""),
-        placeholder="e.g. family history of AMD, RP, glaucoma, DM..."
-    )
-with col_k3b:
-    medications = st.text_input(
-        "Medications",
-        value=st.session_state.get("medications",""),
-        placeholder="e.g. metformin, warfarin, chloroquine, corticosteroids..."
-    )
-    additional_notes = st.text_input(
-        "Additional notes",
-        value=st.session_state.get("additional_notes",""),
-        placeholder="trauma history, gestational week, systemic treatment, other..."
-    )
+    col_k3a, col_k3b = st.columns(2)
+    with col_k3a:
+        ocular_history = st.text_input(
+            "Ocular history",
+            value=st.session_state.get("ocular_history",""),
+            placeholder="e.g. laser, anti-VEGF injection, vitrectomy, cataract surgery..."
+        )
+        family_history = st.text_input(
+            "Family history",
+            value=st.session_state.get("family_history",""),
+            placeholder="e.g. family history of AMD, RP, glaucoma, DM..."
+        )
+    with col_k3b:
+        medications = st.text_input(
+            "Medications",
+            value=st.session_state.get("medications",""),
+            placeholder="e.g. metformin, warfarin, chloroquine, corticosteroids..."
+        )
+        additional_notes = st.text_input(
+            "Additional notes",
+            value=st.session_state.get("additional_notes",""),
+            placeholder="trauma history, gestational week, systemic treatment, other..."
+        )
+else:
+    systemic_diseases = st.session_state.get("systemic_diseases",[])
+    ocular_history = st.session_state.get("ocular_history","")
+    medications = st.session_state.get("medications","")
+    family_history = st.session_state.get("family_history","")
+    additional_notes = st.session_state.get("additional_notes","")
 
 # ── Update session state ──────────────────────────────────────────────────
 st.session_state.age                = int(age)
