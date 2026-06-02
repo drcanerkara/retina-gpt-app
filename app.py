@@ -804,15 +804,17 @@ def call_openai_vision(clinical_text: str, images):
             "You are Specialist A, an expert retina subspecialist. Carefully examine ALL provided retinal images "
             "(which may include fundus photography, OCT, FAF, FA, OCTA, ICGA, or wide-field imaging) "
             "together with the clinical information.\n\n"
-            "CRITICAL RULES:\n"
-            "1. You MUST always provide a top_diagnosis — never leave it empty or return 'UNCERTAIN'.\n"
-            "2. If the diagnosis is genuinely uncertain, provide your BEST GUESS with LOW confidence "
-            "and explain your reasoning in key_evidence.\n"
-            "3. You MUST list at least 2 top_differentials — these must be DIFFERENT from top_diagnosis.\n"
-            "4. You MUST list at least 2 key_evidence items describing what you see in the images.\n"
-            "5. Describe specific morphological findings: fluid (SRF/IRF/CME), exudates, "
-            "hemorrhage, drusen, RPE changes, ellipsoid zone status, neovascularization, etc.\n"
-            "6. NEVER repeat top_diagnosis inside top_differentials.\n\n"
+            "CRITICAL RULES — THESE ARE MANDATORY, NOT OPTIONAL:\n"
+            "1. You MUST ALWAYS provide a top_diagnosis. NEVER return 'UNCERTAIN', 'UNKNOWN', or an empty string.\n"
+            "   This is a RESEARCH PROTOCOL — uncertain cases still require your best morphological impression.\n"
+            "2. If you cannot be certain, give your BEST MORPHOLOGICAL GUESS with LOW confidence.\n"
+            "   Example: if you see hard exudates, write 'Exudative maculopathy — etiology unclear' NOT 'UNCERTAIN'.\n"
+            "3. You MUST list at least 2 top_differentials — DIFFERENT from top_diagnosis.\n"
+            "4. You MUST list at least 3 key_evidence items describing specific findings you see in the images.\n"
+            "5. Always describe: fluid type (SRF/IRF/CME), exudates, hemorrhage, drusen, "
+            "RPE changes, ellipsoid zone, neovascularization, vascular changes.\n"
+            "6. NEVER leave top_differentials or key_evidence as empty arrays [].\n"
+            "7. NEVER repeat top_diagnosis inside top_differentials.\n\n"
             "Return STRICT JSON ONLY — no markdown, no explanation — matching this schema exactly:\n"
             f"{json.dumps(VISION_JSON_SCHEMA, ensure_ascii=False)}\n\n"
             f"Clinical info:\n{clinical_text or '(none provided)'}"
@@ -846,20 +848,28 @@ def call_openai_vision(clinical_text: str, images):
             nudge_content[0] = {
                 "type": "text",
                 "text": (
-                    "You are Specialist A, an expert retina subspecialist. You MUST provide a specific diagnosis.\n"
-                    "Look carefully at the images. Describe what you see: any fluid, exudates, "
-                    "hemorrhage, drusen, membrane, vascular changes, or structural abnormalities.\n"
-                    "Based on these findings, provide your best clinical impression.\n\n"
+                    "MANDATORY RETRY — You must provide a diagnosis now.\n\n"
+                    "Your previous response was empty or 'UNCERTAIN'. This is NOT acceptable in this research protocol.\n\n"
+                    "INSTRUCTIONS:\n"
+                    "1. Look at the image(s) carefully. Identify ALL visible abnormalities.\n"
+                    "2. Even with no clinical data, you can see: hard exudates, soft exudates, hemorrhages, "
+                    "fluid, drusen, pigment changes, vascular abnormalities, membrane, etc.\n"
+                    "3. Based ONLY on morphological findings, name the most likely retinal condition.\n"
+                    "4. If truly ambiguous, use descriptive diagnoses like:\n"
+                    "   - 'Exudative maculopathy, etiology unclear'\n"
+                    "   - 'Retinal vascular disease with macular involvement'\n"
+                    "   - 'Macular edema, cause undetermined'\n"
+                    "   NEVER use 'UNCERTAIN' or leave fields empty.\n\n"
                     "Return STRICT JSON ONLY matching this schema:\n"
                     f"{json.dumps(VISION_JSON_SCHEMA, ensure_ascii=False)}\n\n"
-                    f"Clinical info:\n{clinical_text or '(none provided)'}"
+                    f"Clinical info:\n{clinical_text or '(none provided — base diagnosis on image morphology only)'}"
                 ),
             }
             resp2 = openai_client.chat.completions.create(
                 model=OPENAI_VISION_MODEL,
                 messages=[{"role": "user", "content": nudge_content}],
-                temperature=0.2,
-                seed=42,
+                temperature=0.3,
+                seed=43,
                 max_tokens=1000,
             )
             raw = resp2.choices[0].message.content or ""
