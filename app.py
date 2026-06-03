@@ -619,6 +619,26 @@ def ss_init():
 ss_init()
 
 
+def reset_condition():
+    """Clear images and results — keep patient info and K/M selection."""
+    # Keep: patient_number, manual_k, manual_m, all clinical fields
+    for k in [
+        "images","final_report","report_history","agreement",
+        "confidence_label","confidence_icon",
+        "clinical","debate_log","sheets_logged","high_uncertainty_case",
+        "arm_a_result","arm_b_result","arm_c_result","arm_d_result",
+        "analysis_done","openai_model_used","openai_fingerprint",
+    ]:
+        st.session_state[k] = [] if k in ("images","report_history") else None
+    st.session_state.analysis_done = False
+    st.session_state.uploader_key = st.session_state.get("uploader_key",0) + 1
+    # Update case_id_str with current K and M
+    _pid3 = f"P{st.session_state.get('patient_number',1):03d}"
+    _m3   = st.session_state.get("manual_m","M1").strip()[:2]
+    _k3   = st.session_state.get("manual_k","K0").strip()[:2]
+    st.session_state.case_id_str = f"{_pid3}-{_m3}-{_k3}"
+
+
 def reset_case():
     st.session_state.case_id += 1
     for k in [
@@ -1955,7 +1975,7 @@ if st.session_state.report_history:
             unsafe_allow_html=True
         )
 
-    btn_c1, btn_c2 = st.columns(2)
+    btn_c1, btn_c2, btn_c3 = st.columns(3)
     with btn_c1:
         if st.session_state.debate_log:
             export_data = {
@@ -1976,8 +1996,16 @@ if st.session_state.report_history:
                 use_container_width=True,
             )
     with btn_c2:
-        if st.button("🆕 New patient", use_container_width=True):
-            reset_case(); st.rerun()
+        if st.button("🔄 New condition (same patient)", use_container_width=True,
+                     help="Keeps patient info and K/M selection — clears images and results"):
+            reset_condition()
+            st.rerun()
+    with btn_c3:
+        if st.button("🆕 New patient", use_container_width=True,
+                     help="Clears everything — next patient number"):
+            st.session_state.patient_number = st.session_state.get("patient_number",1) + 1
+            reset_case()
+            st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
 
