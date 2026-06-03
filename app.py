@@ -38,8 +38,8 @@ html, body, [class*="css"] {
 .rgpt-header {
     background: linear-gradient(135deg, #0a1628 0%, #0d2240 50%, #0a1e38 100%);
     border-radius: 16px;
-    padding: 28px 32px 24px;
-    margin: 0 0 1.5rem 0;
+    padding: 32px 32px 24px;
+    margin: 1rem 0 1.5rem 0;
     position: relative;
     overflow: hidden;
 }
@@ -1784,7 +1784,7 @@ st.markdown('''<div class="rgpt-section">
 <div class="rgpt-section-title"><span></span>Retinal Imaging</div>
 ''', unsafe_allow_html=True)
 
-MODALITY_OPTIONS = ["OCT", "Fundus photo", "FAF", "FA", "OCTA", "ICGA", "Wide-field", "Other"]
+MODALITY_OPTIONS = ["Fundus photo", "OCT", "FAF", "FA", "OCTA", "ICGA", "Wide-field", "Other"]
 MODALITY_COLORS  = {
     "OCT":         "#0ea5e9",
     "Fundus photo":"#10b981",
@@ -1815,7 +1815,7 @@ if uploads:
             mod_key = f"mod_{st.session_state.uploader_key}_{i}_{f.name}"
             # Guess modality from filename
             fname_lower = f.name.lower()
-            default_mod = "OCT"
+            default_mod = "Fundus photo"
             for guess, keywords in [
                 ("OCT",          ["oct"]),
                 ("Fundus photo", ["fundus","cfp","color","photo"]),
@@ -2019,7 +2019,7 @@ if st.session_state.report_history:
 <p style="font-size:0.8rem;color:#64748b;margin:0 0 12px 0;">Upload more modalities for the same case to refine the assessment.</p>
 ''', unsafe_allow_html=True)
 
-    modality_options = ["OCT","Fundus photo","FAF","FA","OCTA","ICGA","Wide-field imaging","Other"]
+    modality_options = ["Fundus photo","OCT","FAF","FA","OCTA","ICGA","Wide-field imaging","Other"]
     cur_mod = st.session_state.additional_modality
     extra_modality = st.selectbox("Imaging modality", modality_options,
                                    index=modality_options.index(cur_mod if cur_mod in modality_options else "Other"),
