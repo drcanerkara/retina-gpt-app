@@ -37,9 +37,9 @@ html, body, [class*="css"] {
 /* ── Header ── */
 .rgpt-header {
     background: linear-gradient(135deg, #0a1628 0%, #0d2240 50%, #0a1e38 100%);
-    border-radius: 0 0 24px 24px;
+    border-radius: 16px;
     padding: 28px 32px 24px;
-    margin: -1rem -1rem 1.5rem -1rem;
+    margin: 0 0 1.5rem 0;
     position: relative;
     overflow: hidden;
 }
