@@ -780,10 +780,10 @@ def build_clinical_summary():
     # K0
     if st.session_state.age: lines.append(f"Age: {st.session_state.age}")
     if st.session_state.sex not in (None, "Select"): lines.append(f"Sex: {st.session_state.sex}")
-    # K1
+    # K1 — age and sex only (laterality moved to K2)
+    # K2
     if st.session_state.laterality not in (None, "Select", ""):
         lines.append(f"Analyzed eye: {st.session_state.laterality}")
-    # K2
     if st.session_state.get("involvement") not in (None, "Select", ""):
         lines.append(f"Involvement pattern: {st.session_state.involvement}")
     va = (st.session_state.get("visual_acuity") or "").strip()
@@ -1513,7 +1513,7 @@ with col_cid:
     )
 
 # ── K Seçici — radio butonlar ────────────────────────────────────────────
-k_opts = ["K0 — Image only","K1 — Basic clinical","K2 — Clinical findings","K3 — Full history"]
+k_opts = ["K0 — Image only","K1 — Age + Sex","K2 — Clinical findings","K3 — Full history"]
 k_default = {"K0":0,"K1":1,"K2":2,"K3":3}.get(st.session_state.get("manual_k","K0"), 0)
 k_choice = st.radio(
     "Clinical Knowledge Layer (K)",
@@ -1531,8 +1531,8 @@ k_bords = {"K0":"#2471A3","K1":"#0E6655","K2":"#B7950B","K3":"#A93226"}
 k_texts = {"K0":"#1A5276","K1":"#0B5345","K2":"#7D6608","K3":"#7B241C"}
 k_field_info = {
     "K0": "No clinical data — images only",
-    "K1": "✅ Age   ✅ Sex   ✅ Analyzed eye (OD/OS)",
-    "K2": "K1   +   ○ Visual acuity   ○ Symptom(s)   ○ Duration   ○ Involvement pattern",
+    "K1": "✅ Age   ✅ Sex",
+    "K2": "K1   +   ○ Analyzed eye (OD/OS)   ○ Visual acuity   ○ Symptom(s)   ○ Duration   ○ Involvement pattern",
     "K3": "K2   +   ○ Systemic diseases   ○ Ocular history   ○ Medications   ○ Family history   ○ Notes",
 }
 _sel_k = st.session_state.manual_k.strip()[:2]  # "K0", "K1", "K2", "K3"
@@ -1604,7 +1604,7 @@ if not _hide_k1:
     st.markdown('''<div style="background:#D1F2EB;border-left:3px solid #0E6655;border-radius:0 8px 8px 0;
          padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
          letter-spacing:0.8px;text-transform:uppercase;color:#0B5345;">
-      K1 — Basic Clinical (Age + Sex + Analyzed Eye)
+      K1 — Basic Clinical (Age + Sex)
     </div>''', unsafe_allow_html=True)
 
 col1, col2 = st.columns(2)
@@ -1630,10 +1630,15 @@ if not _hide_k2:
     st.markdown('''<div style="background:#FEF9E7;border-left:3px solid #B7950B;border-radius:0 8px 8px 0;
          padding:8px 12px;margin:14px 0 10px 0;font-size:0.75rem;font-weight:600;
          letter-spacing:0.8px;text-transform:uppercase;color:#7D6608;">
-      K2 — Clinical Findings (VA + Symptoms + Duration + Involvement)
+      K2 — Clinical Findings (Analyzed Eye + VA + Symptoms + Duration + Involvement)
     </div>''', unsafe_allow_html=True)
 
 if not _hide_k2:
+    lat_opts = ["Select", "OD (Right)", "OS (Left)"]
+    cur_lat = st.session_state.laterality if st.session_state.laterality in lat_opts else "Select"
+    laterality = st.selectbox("Analyzed eye (OD/OS)", lat_opts,
+                               index=lat_opts.index(cur_lat),
+                               help="Which eye's images are being analyzed?")
     col_va, col_dur = st.columns(2)
     with col_va:
         visual_acuity = st.text_input(
@@ -1671,6 +1676,7 @@ if not _hide_k2:
         help="Is the disease unilateral or bilateral?"
     )
 else:
+    laterality = st.session_state.laterality or "Select"
     visual_acuity = st.session_state.get("visual_acuity","")
     duration = st.session_state.get("duration","")
     primary_symptom = st.session_state.get("primary_symptom",[])
@@ -1755,7 +1761,7 @@ def detect_clinical_layer():
         bool((st.session_state.get("duration") or "").strip()),
         st.session_state.get("involvement","") not in ("","Select"),
     ])
-    k1 = st.session_state.laterality not in ("", "Select")
+    k1 = st.session_state.sex not in ("", "Select") or st.session_state.age > 0
     if k3: return "K3"
     if k2: return "K2"
     if k1: return "K1"
