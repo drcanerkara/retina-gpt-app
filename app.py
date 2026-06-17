@@ -391,9 +391,10 @@ def get_sheets_client():
 
 
 def ensure_header(ws):
-    """Write header row if sheet is empty."""
+    """Write header row only if the sheet has no header yet (first cell empty or wrong)."""
     try:
-        if ws.cell(1, 1).value != "timestamp":
+        first_cell = ws.cell(1, 1).value
+        if first_cell != SHEETS_COLUMNS[0]:
             ws.insert_row(SHEETS_COLUMNS, 1)
     except Exception:
         pass
@@ -450,72 +451,92 @@ def log_to_sheets(export_data: dict):
                 if len(parts) >= 1: patient_id   = parts[0].strip()
                 if len(parts) >= 2: disease_code = parts[1].strip()
 
-        row = [
-            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        # Build a dict keyed by column name — eliminates any risk of
+        # values shifting out of alignment with SHEETS_COLUMNS order.
+        row_dict = {
             # ── Study identifiers ──────────────────────────────────────
-            st.session_state.get("case_id_str", export_data.get("case_id","")),  # StudyCaseID
-            patient_id,                                                            # PatientCode
-            st.session_state.get("laterality",""),                                # Eye
-            st.session_state.get("modality_set","M1"),                            # M_Level
-            export_data.get("clinical_layer","K0"),                               # K_Level
-            f"{st.session_state.get('modality_set','M1')}-{'+'.join([v[:4].replace(' ','') for v in mod_values[:3]])}",  # ImageSetID
-            has_mod("Fundus"), has_mod("OCT"), has_mod("FA"),
-            has_mod("FAF"), has_mod("OCTA"), has_mod("ICGA"), has_mod("Wide"),
-            # ── Clinical input ──────────────────────────────────────────
-            st.session_state.get("age",""),
-            st.session_state.get("sex",""),
-            st.session_state.get("involvement",""),
-            st.session_state.get("visual_acuity",""),
-            ", ".join(st.session_state.get("primary_symptom",[])) if isinstance(st.session_state.get("primary_symptom",[]),list) else st.session_state.get("primary_symptom",""),
-            st.session_state.get("duration",""),
-            ", ".join(st.session_state.get("systemic_diseases",[])) if isinstance(st.session_state.get("systemic_diseases",[]),list) else st.session_state.get("systemic_diseases",""),
-            st.session_state.get("ocular_history",""),
-            st.session_state.get("medications",""),
-            st.session_state.get("family_history",""),
-            st.session_state.get("additional_notes",""),
-            export_data.get("clinical",""),                                        # ClinicalInput_Text
-            "",                                                                    # UploaderID — manuel
-            # ── Run metadata ────────────────────────────────────────────
-            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),                # AnalysisDate
-            st.session_state.get("openai_model_used", OPENAI_VISION_MODEL),       # Model
-            st.session_state.get("openai_fingerprint",""),                        # ModelFingerprint
-            PROMPT_VERSION,                                                        # PromptVersion
-            ANALYSIS_LANGUAGE,                                                    # AnalysisLanguage
-            str(TEMPERATURE_OPENAI),                                              # TemperatureOpenAI
-            str(TEMPERATURE_GEMINI),                                              # TemperatureGemini
-            str(SEED_OPENAI),                                                     # SeedOpenAI
-            f"{st.session_state.get('case_id_str','')}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",  # RunID
-            # ── AI outputs ──────────────────────────────────────────────
-            arm_a.get("top_diagnosis",""),
-            (arm_a.get("top_differentials") or ["","",""])[0] if arm_a.get("top_differentials") else "",
-            (arm_a.get("top_differentials") or ["","",""])[1] if len(arm_a.get("top_differentials") or []) > 1 else "",
-            arm_a.get("confidence",""),
-            arm_b.get("top_diagnosis",""),
-            (arm_b.get("top_differentials") or ["","",""])[0] if arm_b.get("top_differentials") else "",
-            (arm_b.get("top_differentials") or ["","",""])[1] if len(arm_b.get("top_differentials") or []) > 1 else "",
-            arm_b.get("confidence",""),
-            str(arm_c.get("agreement","")),
-            arm_d.get("final_diagnosis", (arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_diagnosis","")),
-            ((arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_differentials") or ["",""])[0],
-            ((arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_differentials") or ["",""])[1] if len(((arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_differentials") or [])) > 1 else "",
-            arm_d.get("confidence_label",""),
-            # ── Debate metrics ───────────────────────────────────────────
-            str(conv.get("agreed_r1","")),
-            str(conv.get("agreed_r3","")),
-            str(conv.get("debate_changed_outcome","")),
-            oa_c.get("revision_type",""),
-            gem_c.get("revision_type",""),
-            str(oa_c.get("revision_type","") == "failed" or gem_c.get("revision_type","") == "failed"),
-            str(st.session_state.get("high_uncertainty_case", False)),
+            "StudyCaseID": st.session_state.get("case_id_str", export_data.get("case_id","")),
+            "PatientCode": patient_id,
+            "Eye": st.session_state.get("laterality",""),
+            "M_Level": st.session_state.get("modality_set","M1"),
+            "K_Level": export_data.get("clinical_layer","K0"),
             # ── Reference diagnosis — researcher fills ───────────────────
-            disease_code,                                                          # DiagnosisCategory
-            "","","","","","",                                                    # PrimaryDiagnosis..FinalReferenceDiagnosis
-            # ── Scoring — researcher fills ───────────────────────────────
-            "","","",  # ArmA
-            "","","",  # ArmB
-            "","","",  # ArmD
-            "",        # GraderNotes
-        ]
+            "DiagnosisCategory": disease_code,
+            "PrimaryDiagnosis": "",
+            "Expert1Diagnosis": "",
+            "Expert2Diagnosis": "",
+            "AdjudicatorDiagnosis": "",
+            "ConsensusStatus": "",
+            "FinalReferenceDiagnosis": "",
+            # ── Clinical input ──────────────────────────────────────────
+            "Age": st.session_state.get("age",""),
+            "Sex": st.session_state.get("sex",""),
+            "InvolvementPattern": st.session_state.get("involvement",""),
+            "VisualAcuity": st.session_state.get("visual_acuity",""),
+            "PrimarySymptoms": ", ".join(st.session_state.get("primary_symptom",[])) if isinstance(st.session_state.get("primary_symptom",[]),list) else st.session_state.get("primary_symptom",""),
+            "Duration": st.session_state.get("duration",""),
+            "SystemicDiseases": ", ".join(st.session_state.get("systemic_diseases",[])) if isinstance(st.session_state.get("systemic_diseases",[]),list) else st.session_state.get("systemic_diseases",""),
+            "OcularHistory": st.session_state.get("ocular_history",""),
+            "Medications": st.session_state.get("medications",""),
+            "FamilyHistory": st.session_state.get("family_history",""),
+            "FreeText": st.session_state.get("additional_notes",""),
+            "UploaderID": "",
+            # ── Imaging ───────────────────────────────────────────────
+            "ImageSetID": f"{st.session_state.get('modality_set','M1')}-{'+'.join([v[:4].replace(' ','') for v in mod_values[:3]])}",
+            "Fundus_File": has_mod("Fundus"),
+            "OCT_File": has_mod("OCT"),
+            "FFA_File": has_mod("FA"),
+            "FAF_File": has_mod("FAF"),
+            "OCTA_File": has_mod("OCTA"),
+            "ICGA_File": has_mod("ICGA"),
+            "Widefield_File": has_mod("Wide"),
+            # ── AI outputs ────────────────────────────────────────────
+            "ArmA_Top1": arm_a.get("top_diagnosis",""),
+            "ArmA_Top2": (arm_a.get("top_differentials") or ["",""])[0] if arm_a.get("top_differentials") else "",
+            "ArmA_Top3": (arm_a.get("top_differentials") or ["","",""])[1] if len(arm_a.get("top_differentials") or []) > 1 else "",
+            "ArmA_Confidence": arm_a.get("confidence",""),
+            "ArmB_Top1": arm_b.get("top_diagnosis",""),
+            "ArmB_Top2": (arm_b.get("top_differentials") or ["",""])[0] if arm_b.get("top_differentials") else "",
+            "ArmB_Top3": (arm_b.get("top_differentials") or ["","",""])[1] if len(arm_b.get("top_differentials") or []) > 1 else "",
+            "ArmB_Confidence": arm_b.get("confidence",""),
+            "ArmC_Agreement": str(arm_c.get("agreement","")),
+            "ArmD_Top1": arm_d.get("final_diagnosis", (arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_diagnosis","")),
+            "ArmD_Top2": ((arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_differentials") or ["",""])[0],
+            "ArmD_Top3": ((arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_differentials") or ["",""])[1] if len(((arm_d.get("debate_transcript") or {}).get("round_3",{}).get("openai_final",{}).get("top_differentials") or [])) > 1 else "",
+            "ArmD_Confidence": arm_d.get("confidence_label",""),
+            # ── Debate metrics ────────────────────────────────────────
+            "AgreementStatus_R1": str(conv.get("agreed_r1","")),
+            "AgreementStatus_R3": str(conv.get("agreed_r3","")),
+            "DebateChangedDiagnosis": str(conv.get("debate_changed_outcome","")),
+            "SpecialistA_RevisionType": oa_c.get("revision_type",""),
+            "SpecialistB_RevisionType": gem_c.get("revision_type",""),
+            "CritiqueFailed": str(oa_c.get("revision_type","") == "failed" or gem_c.get("revision_type","") == "failed"),
+            "NeedsHumanReview": str(st.session_state.get("high_uncertainty_case", False)),
+            # ── Scoring — researcher fills ────────────────────────────
+            "CorrectTop1_ArmA": "", "CorrectTop3_ArmA": "", "CorrectCategory_ArmA": "",
+            "CorrectTop1_ArmB": "", "CorrectTop3_ArmB": "", "CorrectCategory_ArmB": "",
+            "CorrectTop1_ArmD": "", "CorrectTop3_ArmD": "", "CorrectCategory_ArmD": "",
+            "GraderNotes": "",
+            # ── Run metadata ──────────────────────────────────────────
+            "AnalysisDate": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Model": st.session_state.get("openai_model_used", OPENAI_VISION_MODEL),
+            "ModelFingerprint": st.session_state.get("openai_fingerprint",""),
+            "PromptVersion": PROMPT_VERSION,
+            "AnalysisLanguage": ANALYSIS_LANGUAGE,
+            "TemperatureOpenAI": str(TEMPERATURE_OPENAI),
+            "TemperatureGemini": str(TEMPERATURE_GEMINI),
+            "SeedOpenAI": str(SEED_OPENAI),
+            "RunID": f"{st.session_state.get('case_id_str','')}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
+            "ClinicalInput_Text": export_data.get("clinical",""),
+        }
+
+        # Map to SHEETS_COLUMNS order explicitly — guarantees no misalignment
+        # even if SHEETS_COLUMNS is reordered in the future.
+        missing_cols = [c for c in SHEETS_COLUMNS if c not in row_dict]
+        if missing_cols:
+            st.session_state.sheets_error = f"row_dict missing columns: {missing_cols}"
+            return False
+        row = [row_dict[c] for c in SHEETS_COLUMNS]
 
         ws.append_row(row, value_input_option="USER_ENTERED")
         return True
@@ -620,18 +641,18 @@ ss_init()
 
 
 def reset_condition():
-    """Clear analysis results only — keep patient info, K/M selection, AND uploaded images."""
+    """Clear images and results — keep patient info and K/M selection."""
+    # Keep: patient_number, manual_k, manual_m, all clinical fields
     for k in [
-        "final_report","report_history","agreement",
+        "images","final_report","report_history","agreement",
         "confidence_label","confidence_icon",
-        "debate_log","sheets_logged","high_uncertainty_case",
+        "clinical","debate_log","sheets_logged","high_uncertainty_case",
         "arm_a_result","arm_b_result","arm_c_result","arm_d_result",
         "analysis_done","openai_model_used","openai_fingerprint",
     ]:
-        st.session_state[k] = [] if k in ("report_history",) else None
+        st.session_state[k] = [] if k in ("images","report_history") else None
     st.session_state.analysis_done = False
-    # NOTE: uploader_key is intentionally NOT incremented here, so the
-    # fundus image(s) already uploaded stay in the file_uploader widget.
+    st.session_state.uploader_key = st.session_state.get("uploader_key",0) + 1
     # Update case_id_str with current K and M
     _pid3 = f"P{st.session_state.get('patient_number',1):03d}"
     _m3   = st.session_state.get("manual_m","M1").strip()[:2]
@@ -1616,7 +1637,14 @@ with col2:
     sex_map  = {"Select":"Select","Male":"Male","Female":"Female","Other":"Other"}
     cur_sex  = sex_map.get(st.session_state.sex, "Select")
     sex = st.selectbox("Sex", sex_opts,
-                       index=sex_opts.index(cur_sex if cur_sex in sex_opts else "Select"))
+                       index=sex_opts.index(cur_sex if cur_sex in sex_opts else "Seçiniz"))
+
+lat_opts = ["Select", "OD (Right)", "OS (Left)"]
+lat_map  = {"Select":"Select","OD (Right)":"OD (Right)","OS (Left)":"OS (Left)"}
+cur_lat  = lat_map.get(st.session_state.laterality, "Select")
+laterality = st.selectbox("Analyzed eye", lat_opts,
+                           index=lat_opts.index(cur_lat if cur_lat in lat_opts else "Select"),
+                           help="Which eye's images are being analyzed?")
 
 # ── K2 Block ─────────────────────────────────────────────────────────────
 if not _hide_k2:
@@ -1631,36 +1659,21 @@ if not _hide_k2:
     cur_lat = st.session_state.laterality if st.session_state.laterality in lat_opts else "Select"
     laterality = st.selectbox("Analyzed eye (OD/OS)", lat_opts,
                                index=lat_opts.index(cur_lat),
-                               help="Which eye's images are being analyzed?",
-                               key="k2_laterality")
-
-    inv_opts = ["Select","Unilateral","Bilateral","Unknown"]
-    cur_inv = st.session_state.get("involvement","Select")
-    if cur_inv not in inv_opts: cur_inv = "Select"
-    involvement = st.selectbox(
-        "Involvement pattern",
-        inv_opts,
-        index=inv_opts.index(cur_inv if cur_inv in inv_opts else "Select"),
-        help="Is the disease unilateral or bilateral?",
-        key="k2_involvement"
-    )
-
+                               help="Which eye's images are being analyzed?")
     col_va, col_dur = st.columns(2)
     with col_va:
         visual_acuity = st.text_input(
             "Visual acuity (Snellen)",
             value=st.session_state.get("visual_acuity",""),
             placeholder="e.g. 1.0 / 0.8 / 0.5 / 0.1 / CF / HM / LP",
-            help="Raw Snellen: 1.0, 0.8, 0.5, 0.1 — CF: counting fingers, HM: hand motion, LP: light perception",
-            key="k2_va"
+            help="Raw Snellen: 1.0, 0.8, 0.5, 0.1 — CF: counting fingers, HM: hand motion, LP: light perception"
         )
     with col_dur:
         duration = st.text_input(
             "Duration / Onset",
             value=st.session_state.get("duration",""),
             placeholder="e.g. 3 days / 2 weeks / 6 months / chronic",
-            help="When symptoms started or how long they have persisted",
-            key="k2_duration"
+            help="When symptoms started or how long they have persisted"
         )
     symp_all = ["Visual loss","Metamorphopsia","Scotoma","Photopsia",
                 "Floaters","Nyctalopia (night blindness)",
@@ -1672,8 +1685,16 @@ if not _hide_k2:
         "Primary symptom(s)",
         options=symp_all,
         default=[s for s in cur_symp if s in symp_all],
-        help="Multiple symptoms can be selected",
-        key="k2_symptoms"
+        help="Multiple symptoms can be selected"
+    )
+    inv_opts = ["Select","Unilateral","Bilateral","Unknown"]
+    cur_inv = st.session_state.get("involvement","Select")
+    if cur_inv not in inv_opts: cur_inv = "Select"
+    involvement = st.selectbox(
+        "Involvement pattern",
+        inv_opts,
+        index=inv_opts.index(cur_inv if cur_inv in inv_opts else "Select"),
+        help="Is the disease unilateral or bilateral?"
     )
 else:
     laterality = st.session_state.laterality or "Select"
@@ -1700,61 +1721,31 @@ if not _hide_k3:
         "Systemic diseases",
         options=sys_all,
         default=[s for s in cur_sys if s in sys_all],
-        help="Multiple systemic diseases can be selected",
-        key="k3_systemic"
+        help="Multiple systemic diseases can be selected"
     )
-
-    st.markdown('<div style="font-size:0.78rem;color:#6b7280;margin:10px 0 2px 0;">Ocular history</div>', unsafe_allow_html=True)
-    oh_has = st.radio("Ocular history present?", ["No","Yes"], horizontal=True,
-                       index=1 if st.session_state.get("ocular_history","") else 0,
-                       key="k3_oh_toggle", label_visibility="collapsed")
-    if oh_has == "Yes":
+    col_k3a, col_k3b = st.columns(2)
+    with col_k3a:
         ocular_history = st.text_input(
-            "Ocular history detail", value=st.session_state.get("ocular_history",""),
-            placeholder="e.g. laser, anti-VEGF injection, vitrectomy, cataract surgery...",
-            key="k3_oh_text", label_visibility="collapsed"
+            "Ocular history",
+            value=st.session_state.get("ocular_history",""),
+            placeholder="e.g. laser, anti-VEGF injection, vitrectomy, cataract surgery..."
         )
-    else:
-        ocular_history = ""
-
-    st.markdown('<div style="font-size:0.78rem;color:#6b7280;margin:10px 0 2px 0;">Medications</div>', unsafe_allow_html=True)
-    med_has = st.radio("Medications present?", ["No","Yes"], horizontal=True,
-                        index=1 if st.session_state.get("medications","") else 0,
-                        key="k3_med_toggle", label_visibility="collapsed")
-    if med_has == "Yes":
-        medications = st.text_input(
-            "Medications detail", value=st.session_state.get("medications",""),
-            placeholder="e.g. metformin, warfarin, chloroquine, corticosteroids...",
-            key="k3_med_text", label_visibility="collapsed"
-        )
-    else:
-        medications = ""
-
-    st.markdown('<div style="font-size:0.78rem;color:#6b7280;margin:10px 0 2px 0;">Family history</div>', unsafe_allow_html=True)
-    fh_has = st.radio("Family history present?", ["No","Yes"], horizontal=True,
-                       index=1 if st.session_state.get("family_history","") else 0,
-                       key="k3_fh_toggle", label_visibility="collapsed")
-    if fh_has == "Yes":
         family_history = st.text_input(
-            "Family history detail", value=st.session_state.get("family_history",""),
-            placeholder="e.g. family history of AMD, RP, glaucoma, DM...",
-            key="k3_fh_text", label_visibility="collapsed"
+            "Family history",
+            value=st.session_state.get("family_history",""),
+            placeholder="e.g. family history of AMD, RP, glaucoma, DM..."
         )
-    else:
-        family_history = ""
-
-    st.markdown('<div style="font-size:0.78rem;color:#6b7280;margin:10px 0 2px 0;">Additional notes</div>', unsafe_allow_html=True)
-    an_has = st.radio("Additional notes present?", ["No","Yes"], horizontal=True,
-                       index=1 if st.session_state.get("additional_notes","") else 0,
-                       key="k3_an_toggle", label_visibility="collapsed")
-    if an_has == "Yes":
+    with col_k3b:
+        medications = st.text_input(
+            "Medications",
+            value=st.session_state.get("medications",""),
+            placeholder="e.g. metformin, warfarin, chloroquine, corticosteroids..."
+        )
         additional_notes = st.text_input(
-            "Additional notes detail", value=st.session_state.get("additional_notes",""),
-            placeholder="trauma history, gestational week, systemic treatment, other...",
-            key="k3_an_text", label_visibility="collapsed"
+            "Additional notes",
+            value=st.session_state.get("additional_notes",""),
+            placeholder="trauma history, gestational week, systemic treatment, other..."
         )
-    else:
-        additional_notes = ""
 else:
     systemic_diseases = st.session_state.get("systemic_diseases",[])
     ocular_history = st.session_state.get("ocular_history","")
