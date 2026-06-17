@@ -620,18 +620,18 @@ ss_init()
 
 
 def reset_condition():
-    """Clear images and results — keep patient info and K/M selection."""
-    # Keep: patient_number, manual_k, manual_m, all clinical fields
+    """Clear analysis results only — keep patient info, K/M selection, AND uploaded images."""
     for k in [
-        "images","final_report","report_history","agreement",
+        "final_report","report_history","agreement",
         "confidence_label","confidence_icon",
-        "clinical","debate_log","sheets_logged","high_uncertainty_case",
+        "debate_log","sheets_logged","high_uncertainty_case",
         "arm_a_result","arm_b_result","arm_c_result","arm_d_result",
         "analysis_done","openai_model_used","openai_fingerprint",
     ]:
-        st.session_state[k] = [] if k in ("images","report_history") else None
+        st.session_state[k] = [] if k in ("report_history",) else None
     st.session_state.analysis_done = False
-    st.session_state.uploader_key = st.session_state.get("uploader_key",0) + 1
+    # NOTE: uploader_key is intentionally NOT incremented here, so the
+    # fundus image(s) already uploaded stay in the file_uploader widget.
     # Update case_id_str with current K and M
     _pid3 = f"P{st.session_state.get('patient_number',1):03d}"
     _m3   = st.session_state.get("manual_m","M1").strip()[:2]
@@ -1616,14 +1616,7 @@ with col2:
     sex_map  = {"Select":"Select","Male":"Male","Female":"Female","Other":"Other"}
     cur_sex  = sex_map.get(st.session_state.sex, "Select")
     sex = st.selectbox("Sex", sex_opts,
-                       index=sex_opts.index(cur_sex if cur_sex in sex_opts else "Seçiniz"))
-
-lat_opts = ["Select", "OD (Right)", "OS (Left)"]
-lat_map  = {"Select":"Select","OD (Right)":"OD (Right)","OS (Left)":"OS (Left)"}
-cur_lat  = lat_map.get(st.session_state.laterality, "Select")
-laterality = st.selectbox("Analyzed eye", lat_opts,
-                           index=lat_opts.index(cur_lat if cur_lat in lat_opts else "Select"),
-                           help="Which eye's images are being analyzed?")
+                       index=sex_opts.index(cur_sex if cur_sex in sex_opts else "Select"))
 
 # ── K2 Block ─────────────────────────────────────────────────────────────
 if not _hide_k2:
@@ -1638,21 +1631,36 @@ if not _hide_k2:
     cur_lat = st.session_state.laterality if st.session_state.laterality in lat_opts else "Select"
     laterality = st.selectbox("Analyzed eye (OD/OS)", lat_opts,
                                index=lat_opts.index(cur_lat),
-                               help="Which eye's images are being analyzed?")
+                               help="Which eye's images are being analyzed?",
+                               key="k2_laterality")
+
+    inv_opts = ["Select","Unilateral","Bilateral","Unknown"]
+    cur_inv = st.session_state.get("involvement","Select")
+    if cur_inv not in inv_opts: cur_inv = "Select"
+    involvement = st.selectbox(
+        "Involvement pattern",
+        inv_opts,
+        index=inv_opts.index(cur_inv if cur_inv in inv_opts else "Select"),
+        help="Is the disease unilateral or bilateral?",
+        key="k2_involvement"
+    )
+
     col_va, col_dur = st.columns(2)
     with col_va:
         visual_acuity = st.text_input(
             "Visual acuity (Snellen)",
             value=st.session_state.get("visual_acuity",""),
             placeholder="e.g. 1.0 / 0.8 / 0.5 / 0.1 / CF / HM / LP",
-            help="Raw Snellen: 1.0, 0.8, 0.5, 0.1 — CF: counting fingers, HM: hand motion, LP: light perception"
+            help="Raw Snellen: 1.0, 0.8, 0.5, 0.1 — CF: counting fingers, HM: hand motion, LP: light perception",
+            key="k2_va"
         )
     with col_dur:
         duration = st.text_input(
             "Duration / Onset",
             value=st.session_state.get("duration",""),
             placeholder="e.g. 3 days / 2 weeks / 6 months / chronic",
-            help="When symptoms started or how long they have persisted"
+            help="When symptoms started or how long they have persisted",
+            key="k2_duration"
         )
     symp_all = ["Visual loss","Metamorphopsia","Scotoma","Photopsia",
                 "Floaters","Nyctalopia (night blindness)",
@@ -1664,16 +1672,8 @@ if not _hide_k2:
         "Primary symptom(s)",
         options=symp_all,
         default=[s for s in cur_symp if s in symp_all],
-        help="Multiple symptoms can be selected"
-    )
-    inv_opts = ["Select","Unilateral","Bilateral","Unknown"]
-    cur_inv = st.session_state.get("involvement","Select")
-    if cur_inv not in inv_opts: cur_inv = "Select"
-    involvement = st.selectbox(
-        "Involvement pattern",
-        inv_opts,
-        index=inv_opts.index(cur_inv if cur_inv in inv_opts else "Select"),
-        help="Is the disease unilateral or bilateral?"
+        help="Multiple symptoms can be selected",
+        key="k2_symptoms"
     )
 else:
     laterality = st.session_state.laterality or "Select"
@@ -1700,31 +1700,61 @@ if not _hide_k3:
         "Systemic diseases",
         options=sys_all,
         default=[s for s in cur_sys if s in sys_all],
-        help="Multiple systemic diseases can be selected"
+        help="Multiple systemic diseases can be selected",
+        key="k3_systemic"
     )
-    col_k3a, col_k3b = st.columns(2)
-    with col_k3a:
+
+    st.markdown('<div style="font-size:0.78rem;color:#6b7280;margin:10px 0 2px 0;">Ocular history</div>', unsafe_allow_html=True)
+    oh_has = st.radio("Ocular history present?", ["No","Yes"], horizontal=True,
+                       index=1 if st.session_state.get("ocular_history","") else 0,
+                       key="k3_oh_toggle", label_visibility="collapsed")
+    if oh_has == "Yes":
         ocular_history = st.text_input(
-            "Ocular history",
-            value=st.session_state.get("ocular_history",""),
-            placeholder="e.g. laser, anti-VEGF injection, vitrectomy, cataract surgery..."
+            "Ocular history detail", value=st.session_state.get("ocular_history",""),
+            placeholder="e.g. laser, anti-VEGF injection, vitrectomy, cataract surgery...",
+            key="k3_oh_text", label_visibility="collapsed"
         )
-        family_history = st.text_input(
-            "Family history",
-            value=st.session_state.get("family_history",""),
-            placeholder="e.g. family history of AMD, RP, glaucoma, DM..."
-        )
-    with col_k3b:
+    else:
+        ocular_history = ""
+
+    st.markdown('<div style="font-size:0.78rem;color:#6b7280;margin:10px 0 2px 0;">Medications</div>', unsafe_allow_html=True)
+    med_has = st.radio("Medications present?", ["No","Yes"], horizontal=True,
+                        index=1 if st.session_state.get("medications","") else 0,
+                        key="k3_med_toggle", label_visibility="collapsed")
+    if med_has == "Yes":
         medications = st.text_input(
-            "Medications",
-            value=st.session_state.get("medications",""),
-            placeholder="e.g. metformin, warfarin, chloroquine, corticosteroids..."
+            "Medications detail", value=st.session_state.get("medications",""),
+            placeholder="e.g. metformin, warfarin, chloroquine, corticosteroids...",
+            key="k3_med_text", label_visibility="collapsed"
         )
+    else:
+        medications = ""
+
+    st.markdown('<div style="font-size:0.78rem;color:#6b7280;margin:10px 0 2px 0;">Family history</div>', unsafe_allow_html=True)
+    fh_has = st.radio("Family history present?", ["No","Yes"], horizontal=True,
+                       index=1 if st.session_state.get("family_history","") else 0,
+                       key="k3_fh_toggle", label_visibility="collapsed")
+    if fh_has == "Yes":
+        family_history = st.text_input(
+            "Family history detail", value=st.session_state.get("family_history",""),
+            placeholder="e.g. family history of AMD, RP, glaucoma, DM...",
+            key="k3_fh_text", label_visibility="collapsed"
+        )
+    else:
+        family_history = ""
+
+    st.markdown('<div style="font-size:0.78rem;color:#6b7280;margin:10px 0 2px 0;">Additional notes</div>', unsafe_allow_html=True)
+    an_has = st.radio("Additional notes present?", ["No","Yes"], horizontal=True,
+                       index=1 if st.session_state.get("additional_notes","") else 0,
+                       key="k3_an_toggle", label_visibility="collapsed")
+    if an_has == "Yes":
         additional_notes = st.text_input(
-            "Additional notes",
-            value=st.session_state.get("additional_notes",""),
-            placeholder="trauma history, gestational week, systemic treatment, other..."
+            "Additional notes detail", value=st.session_state.get("additional_notes",""),
+            placeholder="trauma history, gestational week, systemic treatment, other...",
+            key="k3_an_text", label_visibility="collapsed"
         )
+    else:
+        additional_notes = ""
 else:
     systemic_diseases = st.session_state.get("systemic_diseases",[])
     ocular_history = st.session_state.get("ocular_history","")
