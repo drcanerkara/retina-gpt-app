@@ -641,18 +641,18 @@ ss_init()
 
 
 def reset_condition():
-    """Clear images and results — keep patient info and K/M selection."""
-    # Keep: patient_number, manual_k, manual_m, all clinical fields
+    """Clear analysis results only — keep patient info, K/M selection, AND uploaded images."""
     for k in [
-        "images","final_report","report_history","agreement",
+        "final_report","report_history","agreement",
         "confidence_label","confidence_icon",
-        "clinical","debate_log","sheets_logged","high_uncertainty_case",
+        "debate_log","sheets_logged","high_uncertainty_case",
         "arm_a_result","arm_b_result","arm_c_result","arm_d_result",
         "analysis_done","openai_model_used","openai_fingerprint",
     ]:
-        st.session_state[k] = [] if k in ("images","report_history") else None
+        st.session_state[k] = [] if k in ("report_history",) else None
     st.session_state.analysis_done = False
-    st.session_state.uploader_key = st.session_state.get("uploader_key",0) + 1
+    # NOTE: uploader_key is intentionally NOT incremented here, so the
+    # fundus image(s) already uploaded stay in the file_uploader widget.
     # Update case_id_str with current K and M
     _pid3 = f"P{st.session_state.get('patient_number',1):03d}"
     _m3   = st.session_state.get("manual_m","M1").strip()[:2]
@@ -2024,7 +2024,7 @@ if st.session_state.report_history:
             )
     with btn_c2:
         if st.button("🔄 New condition (same patient)", use_container_width=True,
-                     help="Keeps patient info and K/M selection — clears images and results"):
+                     help="Keeps patient info, images, and K/M selection — clears only the analysis result"):
             reset_condition()
             st.rerun()
     with btn_c3:
