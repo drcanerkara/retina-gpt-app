@@ -959,7 +959,7 @@ def call_gemini_vision(clinical_text: str, images, max_retries: int = 3):
 # ── ROUND 2: Cross-critique ──
 # =========================
 def call_openai_critique(clinical_text: str, images, gemini_opinion: dict, oa_r1: dict = None):
-    """GPT-4o reads Gemini's Round 1 output and critiques it."""
+    """GPT-4o reads Gemini's Round 1 output and critiques it. Retries up to 3 times."""
     own_context = (
         f"\nYour own Round 1 assessment was:\n{json.dumps(oa_r1, ensure_ascii=False, indent=2)}\n"
         if oa_r1 else ""
@@ -990,18 +990,26 @@ def call_openai_critique(clinical_text: str, images, gemini_opinion: dict, oa_r1
     }]
     for img in images:
         crit_content.append({"type": "image_url", "image_url": {"url": b64_data_url(img["mime"], img["data"])}})
-    try:
-        resp = openai_client.chat.completions.create(
-            model=OPENAI_VISION_MODEL,
-            messages=[{"role": "user", "content": crit_content}],
-            temperature=0,
-            seed=42,
-            max_tokens=1000,
-        )
-        raw = resp.choices[0].message.content or ""
-        return raw, safe_json_extract(raw)
-    except Exception as e:
-        return f"OpenAI critique error: {e}", None
+
+    for attempt in range(3):
+        try:
+            resp = openai_client.chat.completions.create(
+                model=OPENAI_VISION_MODEL,
+                messages=[{"role": "user", "content": crit_content}],
+                temperature=TEMPERATURE_OPENAI if attempt == 0 else 0.3,
+                seed=SEED_OPENAI,
+                max_tokens=1000,
+            )
+            raw = resp.choices[0].message.content or ""
+            parsed = safe_json_extract(raw)
+            if parsed and parsed.get("revision_type"):
+                return raw, parsed
+            # If parse failed, retry
+        except Exception as e:
+            if attempt == 2:
+                return f"OpenAI critique error: {e}", None
+        time.sleep(2)
+    return "OpenAI critique: max retries exceeded", None
 
 
 def call_gemini_critique(clinical_text: str, images, openai_opinion: dict, gem_r1: dict = None, max_retries: int = 3):
