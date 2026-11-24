@@ -285,8 +285,7 @@ if not GEMINI_API_KEY:
     st.stop()
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-
+gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1beta"})
 
 # ── Sheets connection test (debug sidebar) ───────────────────────────────────
 if st.sidebar.button("Test Sheets Connection"):
